@@ -104,10 +104,13 @@ class TransitionUp(nn.Module):
         else:
             self.n_channels_out = self.n_channels_in
 
+        # pad input and output by `1` to maintain (x,y) size
         self.transconv = nn.ConvTranspose2d(
                 self.n_channels_in,
                 self.n_channels_out,
-                kernel_size=3, stride=2)
+                kernel_size=3, stride=2,
+                padding=1,
+                output_padding=1)
 
     def forward(self, x):
         upsamp = self.transconv(x)
@@ -136,8 +139,9 @@ class DenseBlock(nn.Module):
         self.n_layers = n_layers
         self.n_channels = n_channels
         self.growth_rate = growth_rate
+        self.keep_input = keep_input
 
-        if keep_input:
+        if self.keep_input:
             self.n_channels_out = n_channels + self.growth_rate*self.n_layers
         else:
             self.n_channels_out = self.growth_rate*self.n_layers
@@ -146,7 +150,7 @@ class DenseBlock(nn.Module):
 
     def forward(self, x):
         out = self.block(x)
-        if not keep_input:
+        if not self.keep_input:
             out = out[:,n_channels:,...] # omit input feature maps
         return out
 
@@ -166,7 +170,8 @@ class DenseBlock(nn.Module):
 
 class DenseNet103(nn.Module):
 
-    def __init__(self, growth_rate=16, n_pool=4, n_classes=2,
+    def __init__(self, growth_rate=16, n_pool=5, n_classes=2,
+                n_channels_in=1,
                 n_channels_first=48,
                 n_layers_down=[4,5,7,10,12],
                 n_layers_up=[12,10,7,5,4]):
@@ -181,6 +186,7 @@ class DenseNet103(nn.Module):
         n_pool : int. number of pooling layers to incorporate
             in the downsampling and upsampling paths.
         n_classes : int. number of classes.
+        n_channels_first : int. number of channels in the input.
         n_channels_first : int. number of channels in the first 3x3 Conv layer.
         n_layers_down : array-like of int. number of layers in downsampling
             DenseBlocks. len == n_pool.
@@ -193,18 +199,19 @@ class DenseNet103(nn.Module):
         self.growth_rate = growth_rate
         self.n_pool = n_pool
         self.n_classes = n_classes
+        self.n_channels_in = n_channels_in
         self.n_channels_first = n_channels_first
         self.n_layers_down = n_layers_down
         self.n_layers_up = n_layers_up
 
         if len(n_layers_down) != n_pool:
             raise ValueError('`n_layers_down` must be length `n_pool`')
-        elif len(n_layers_up) == n_pool:
+        elif len(n_layers_up) != n_pool:
             raise ValueError('`n_layers_up` must be length `n_pool`')
         else:
             pass
 
-        self.conv0 = nn.Conv2d(self.n_channels, self.n_channels_first,
+        self.conv0 = nn.Conv2d(self.n_channels_in, self.n_channels_first,
                         kernel_size=3, stride=1, padding=1)
 
         # Downsampling path
@@ -220,8 +227,9 @@ class DenseNet103(nn.Module):
 
         # Bottleneck
         self.bottleneck = DenseBlock(n_layers=15,
-                                n_channels=self.dblock4.n_channels_out,
-                                growth_rate=self.growth_rate)
+                n_channels=getattr(self,
+                            'down_dblock'+str(self.n_pool-1)).n_channels_out,
+                growth_rate=self.growth_rate)
 
         # Upsampling path
         up_channels = self.bottleneck.n_channels_out
@@ -236,7 +244,7 @@ class DenseNet103(nn.Module):
             up_channels = getattr(self, 'up_dblock' + str(i)).n_channels_out
 
         self.conv1 = nn.Conv2d(
-            getattr(self, 'up_dblock' + str(self.n_pool)).n_channels_out,
+            getattr(self, 'up_dblock' + str(self.n_pool-1)).n_channels_out,
             self.n_classes,
             kernel_size=1)
 
@@ -250,10 +258,11 @@ class DenseNet103(nn.Module):
         dblock_outs = []
         for i in range(self.n_pool):
 
-            dblock = getattr('down_dblock' + str(i))
-            td = getattr('td' + str(i))
+            dblock = getattr(self, 'down_dblock' + str(i))
+            td = getattr(self, 'td' + str(i))
 
             db_x = dblock(out)
+            print('Down: ', db_x.size())
             dblock_outs.append(db_x)
 
             out = td(db_x)
@@ -265,12 +274,15 @@ class DenseNet103(nn.Module):
         out = bneck
         for i in range(self.n_pool):
 
-            tu = getattr('tu' + str(i))
-            ublock = getattr('up_dblock' + str(i))
-            skip = dblock_outs[-i]
+            tu = getattr(self, 'tu' + str(i))
+            ublock = getattr(self, 'up_dblock' + str(i))
+            skip = dblock_outs[-(i+1)]
+            print('Skip: ', skip.size())
 
             up = tu(out)
-            cat = torch.cat([skip, up])
+            print('Up: ', up.size())
+
+            cat = torch.cat([skip, up], 1)
             out = ublock(cat)
 
         classif = self.conv1(out)
