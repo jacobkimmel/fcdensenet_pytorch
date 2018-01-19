@@ -151,7 +151,7 @@ class DenseBlock(nn.Module):
     def forward(self, x):
         out = self.block(x)
         if not self.keep_input:
-            out = out[:,n_channels:,...] # omit input feature maps
+            out = out[:,self.n_channels:,...] # omit input feature maps
         return out
 
     def _build_block(self):
@@ -174,7 +174,8 @@ class DenseNet103(nn.Module):
                 n_channels_in=1,
                 n_channels_first=48,
                 n_layers_down=[4,5,7,10,12],
-                n_layers_up=[12,10,7,5,4]):
+                n_layers_up=[12,10,7,5,4],
+                verbose=False):
         '''
         DenseNet 103 for semantic segmentation,
         as described in Jegou 2017.
@@ -192,6 +193,7 @@ class DenseNet103(nn.Module):
             DenseBlocks. len == n_pool.
         n_layers_up : array-like of int. number of layers in upsampling
             DenseBlocks. len == n_pool.
+        verbose : boolean. print downsampling/upsampling dimensionality.
         '''
 
         super(DenseNet103, self).__init__()
@@ -203,6 +205,7 @@ class DenseNet103(nn.Module):
         self.n_channels_first = n_channels_first
         self.n_layers_down = n_layers_down
         self.n_layers_up = n_layers_up
+        self.verbose = verbose
 
         if len(n_layers_down) != n_pool:
             raise ValueError('`n_layers_down` must be length `n_pool`')
@@ -216,31 +219,40 @@ class DenseNet103(nn.Module):
 
         # Downsampling path
         down_channels = self.n_channels_first
+        skip_channels = []
         for i in range(n_pool):
             setattr(self, 'down_dblock' + str(i),
                     DenseBlock(n_layers=self.n_layers_down[i],
                         n_channels=down_channels,
                         growth_rate=self.growth_rate))
-            down_channels = getattr(self, 'down_dblock' + str(i)).n_channels_out
+            down_channels = getattr( self, 'down_dblock' + str(i) ).n_channels_out
             setattr(self, 'td' + str(i),
                 TransitionDown(n_channels_in=down_channels))
+            skip_channels.append(down_channels)
 
         # Bottleneck
         self.bottleneck = DenseBlock(n_layers=15,
                 n_channels=getattr(self,
                             'down_dblock'+str(self.n_pool-1)).n_channels_out,
-                growth_rate=self.growth_rate)
+                growth_rate=self.growth_rate,
+                keep_input=False)
 
         # Upsampling path
         up_channels = self.bottleneck.n_channels_out
         for i in range(n_pool):
+            keep = False
             setattr(self, 'tu' + str(i),
                     TransitionUp(n_channels_in=up_channels))
+
+            schan = skip_channels[-(i+1)]
+            udb_channels = up_channels + schan
+
             setattr(self, 'up_dblock' + str(i),
                     DenseBlock(n_layers=self.n_layers_up[i],
-                                n_channels=up_channels,
+                                n_channels=udb_channels,
                                 growth_rate=self.growth_rate,
-                                keep_input=False))
+                                keep_input=keep))
+
             up_channels = getattr(self, 'up_dblock' + str(i)).n_channels_out
 
         self.conv1 = nn.Conv2d(
@@ -255,20 +267,23 @@ class DenseNet103(nn.Module):
         out = in_conv
 
         # Downsampling path
-        dblock_outs = []
+        self.dblock_outs = []
         for i in range(self.n_pool):
 
             dblock = getattr(self, 'down_dblock' + str(i))
             td = getattr(self, 'td' + str(i))
 
             db_x = dblock(out)
-            print('Down: ', db_x.size())
-            dblock_outs.append(db_x)
+            self.dblock_outs.append(db_x)
 
             out = td(db_x)
+            if self.verbose:
+                print('m: ', out.size(1))
 
         # Bottleneck
         bneck = self.bottleneck(out)
+        if self.verbose:
+            print('bottleneck m: ', bneck.size(1) + out.size(1))
 
         # Upsampling path
         out = bneck
@@ -276,13 +291,22 @@ class DenseNet103(nn.Module):
 
             tu = getattr(self, 'tu' + str(i))
             ublock = getattr(self, 'up_dblock' + str(i))
-            skip = dblock_outs[-(i+1)]
-            print('Skip: ', skip.size())
+            skip = self.dblock_outs[-(i+1)]
 
             up = tu(out)
-            print('Up: ', up.size())
 
             cat = torch.cat([skip, up], 1)
             out = ublock(cat)
 
+            if self.verbose:
+                print('Skip: ', skip.size())
+                print('Up: ', up.size())
+                print('Cat: ', cat.size())
+                print('Out: ', out.size())
+                print('m : ', cat.size(1) + out.size(1))
+
         classif = self.conv1(out)
+
+        if self.verbose:
+            print('Classif: ', classif.size())
+        return classif
