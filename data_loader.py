@@ -39,7 +39,7 @@ def resize_sample(sample, size=(512,512,1)):
 class CellDataset(Dataset):
     '''Cell Segmentation Dataset'''
 
-    def __init__(self, img_dir, mask_dir, transform=None, dtype='uint16'):
+    def __init__(self, img_dir, mask_dir, transform=None, dtype='uint16', symlinks: bool=False):
         '''
         Parameters
         ----------
@@ -56,6 +56,11 @@ class CellDataset(Dataset):
         self.imgs.sort()
         self.masks.sort()
         self.dtype = dtype
+        self.symlinks = symlinks
+        
+        if self.symlinks:
+            self.imgs = [os.path.realpath(x) for x in self.imgs]
+            self.masks = [os.path.realpath(x) for x in self.masks]
 
         assert len(self.imgs) == len(self.masks),'Mismatched img and mask numbers'
 
@@ -124,7 +129,8 @@ class PredLoader(Dataset):
             image = np.expand_dims(image, -1)
         if len(mask.shape) < 3:
             mask = np.expand_dims(mask, -1)
-
+        
+        sample = {'image':image, 'mask':mask}
         if self.transform:
             sample = self.transform(sample)
 
@@ -162,6 +168,19 @@ class ToTensor(object):
             return {'image': torch.from_numpy(image).byte(),
                     'mask': torch.from_numpy(mask).long()}
 
+class BinarizeMask(object):
+    '''Binarizes masks'''
+
+    def __init__(self):
+        return
+
+    def __call__(self, sample):
+        image, mask = sample['image'], sample['mask']
+        mask = mask.astype('bool')
+        sample = {'image':image, 'mask':mask}
+        return sample
+
+        
 class ChangeLabels(object):
     '''Changes a mask label to another in arrays'''
 
@@ -235,7 +254,10 @@ class Resize(object):
                 chanR = imresize(np.squeeze(image[...,c]), self.sz)
                 chans.append(chanR)
             imageR = np.squeeze(np.stack(chans, axis=-1))
+            
+        mask = mask.astype('uint8')
         maskR = imresize(np.squeeze(mask), self.sz, interp='nearest')
+        
         # reset mask to single integer labels
         for i in range(len(np.unique(maskR))):
             maskR[maskR == np.unique(maskR)[i]] = i
@@ -434,3 +456,21 @@ grayscale_1024RGBval = transforms.Compose([Resize(size=(1024,1024,1)), RescaleUn
 grayscale_128 = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), SamplewiseCenter(), RandomFlip(), ClassBalance(ignore_index=2, p=0.02), ToTensor()])
 grayscale_128val = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), SamplewiseCenter(), ToTensor()])
 grayscale_128nobal = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), SamplewiseCenter(), RandomFlip(), ToTensor()])
+
+basic_512 = transforms.Compose([BinarizeMask(),
+                                Resize(size=(512,512,1)), 
+                                RescaleUnit(), 
+                                SamplewiseCenter(), 
+                                RandomFlip(), 
+                                ToTensor()])
+
+basic_256 = transforms.Compose([Resize(size=(256,256,1)), 
+                                RescaleUnit(), 
+                                SamplewiseCenter(), 
+                                RandomFlip(), 
+                                ToTensor()])
+
+basic_256v = transforms.Compose([Resize(size=(256,256,1)), 
+                                RescaleUnit(), 
+                                SamplewiseCenter(), 
+                                ToTensor()])
