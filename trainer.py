@@ -12,6 +12,7 @@ import sys
 import model as mdls
 import torchvision.utils as vutils
 import utils
+from skimage.io import imsave
 
 # Inspired by W. Kentaro (@wkentaro)
 def crossentropy2d(pred, target, weight=None, ignore_index=2, size_average=True):
@@ -107,7 +108,7 @@ class Trainer(object):
     def __init__(self, model, criterion, optimizer,
                 dataloaders, out_path, n_epochs=50, ignore_index=2,
                 use_gpu=torch.cuda.is_available(), verbose=False, save_freq = 10,
-                scheduler = None):
+                scheduler = None, viz: bool=False):
 
         '''
         Trains a PyTorch `nn.Module` object provided in `model`
@@ -130,6 +131,7 @@ class Trainer(object):
         verbose : boolean. write all batch losses to stdout.
         save_freq : integer. Number of epochs between model checkpoints. Default = 10.
         scheduler : learning rate scheduler.
+        viz: bool. save visualizations of segmentation performance with print outputs.
         '''
         self.model = model
         self.optimizer = optimizer
@@ -144,6 +146,7 @@ class Trainer(object):
         self.best_acc = 0.
         self.best_loss = 1.0e10
         self.scheduler = scheduler
+        self.viz = viz
 
         if not os.path.exists(self.out_path):
             os.mkdir(self.out_path)
@@ -152,6 +155,23 @@ class Trainer(object):
         with open(self.log_path, 'w') as f:
             header = 'Epoch,Iter,Running_Loss,Mode\n'
             f.write(header)
+            
+    def _save_train_viz(inputs, labels, outputs, iteration):
+        '''save visualizations of training'''
+        I = inputs.cpu().detach().numpy()
+        L = labels.cpu().detach().numpy()
+        O = outputs.cpu().detach().numpy()
+        
+        for b in range(1):
+            imsave(os.path.join(self.out_path, 
+                    'inputs_e' + str(self.epoch).zfill(4) + '_i' + str(iteration).zfill(4) + '.png'),
+                  np.squeeze(I[b,...]))
+            imsave(os.path.join(self.out_path, 
+                    'labels_e' + str(self.epoch).zfill(4) + '_i' + str(iteration).zfill(4) + '.png'),
+                  np.squeeze(L[b,...]))
+            imsave(os.path.join(self.out_path, 
+                    'outputs_e' + str(self.epoch).zfill(4) + '_i' + str(iteration).zfill(4) + '.png'),
+                  np.squeeze(O[b,...]))
 
     def train_epoch(self):
         # Run a train and validation phase for each epoch
@@ -190,7 +210,7 @@ class Trainer(object):
             self.optimizer.step()
 
             # statistics update
-            running_loss += loss.item() / inputs.size(0)
+            running_loss += loss.detach().item() / inputs.size(0)
 
             if i % 100 == 0:
                 print('Iter : ', i)
@@ -198,6 +218,8 @@ class Trainer(object):
                 # append to log
                 with open(self.log_path, 'a') as f:
                     f.write(str(self.epoch) + ',' + str(i) + ',' + str(running_loss / (i + 1)) + ',train\n')
+                if self.viz:
+                    self._save_train_viz(inputs, labels, outputs, i)
             i += 1
 
         epoch_loss = running_loss / len(self.dataloaders['train'])
@@ -208,8 +230,8 @@ class Trainer(object):
         print('{} Loss : {:.4f}'.format('train', epoch_loss))
 
     def val_epoch(self):
-        self.model.train(False)
-        #self.model.eval()
+        self.model.eval()
+        self.optimizer.zero_grad()
         i = 0
         running_loss = 0.0
         running_corrects = 0.0
@@ -224,16 +246,13 @@ class Trainer(object):
             inputs.requires_grad = False
             labels.requires_grad = False # just double check these are volatile
 
-
-            # zero gradients
-            self.optimizer.zero_grad()
             # forward pass
             outputs = self.model(inputs)
             _, preds = torch.max(outputs.data, 1)
             loss = self.criterion(outputs, labels)
 
             # statistics update
-            running_loss += loss.item() / inputs.size(0)
+            running_loss += loss.detach().item() / inputs.size(0)
 
             if i % 100 == 0:
                 print('Iter : ', i)
@@ -268,7 +287,8 @@ class Trainer(object):
             if self.scheduler is not None:
                 self.scheduler.step()
             self.train_epoch()
-            self.val_epoch()
+            with torch.no_grad():
+                self.val_epoch()
 
         print('Saving best model weights...')
         torch.save(self.model.state_dict(), os.path.join(self.out_path, '00_best_model_weights.pickle'))

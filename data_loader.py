@@ -1,5 +1,5 @@
 '''
-Generate a DataLoader for Lifeact Image Data
+Generate a DataLoader for Cell Image Data
 '''
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -227,6 +227,40 @@ class RandomFlip(object):
 
         sample = {'image':image, 'mask':mask}
         return sample
+    
+class RandomCrop(object):
+    '''Randomly crops an image'''
+    
+    def __init__(self, crop_sz=(512, 512)):
+        self.crop_sz = np.array(crop_sz).astype('int')
+        
+    def __call__(self, sample):
+        '''
+        sample : dict 
+            'image' : [H, W, C] np.ndarray
+            'mask'  : [H, W] np.ndarray
+        '''
+        image, mask = sample['image'], sample['mask']
+        
+        max_hidx = image.shape[0] - crop_sz[0]
+        max_widx = image.shape[1] - crop_sz[1]
+        
+        hidx = np.random.choice(np.arange(max_hidx), size=1).astype('int')[0]
+        widx = np.random.choice(np.arange(max_widx), size=1).astype('int')[0]
+        
+        assert type(hidx) is int and type(widx) is int
+        assert hidx+crop_sz[0] < image.shape[0]
+        assert widx+crop_sz[1] < image.shape[1]
+        
+        imageC = image[hidx : hidx + crop_sz[0],
+                       widx : widx + crop_sz[1],
+                      :] # leave channels alone
+        maskC  = mask[hidx : hidx + crop_sz[0],
+                      widx : widx + crop_sz[1],
+                      :] # leave channels alone
+        sample = {'image':imageC, 'mask':maskC}
+        return sample
+        
 
 class SamplewiseCenter(object):
     '''Sets images to have 0 mean'''
@@ -457,8 +491,7 @@ grayscale_128 = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), Sam
 grayscale_128val = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), SamplewiseCenter(), ToTensor()])
 grayscale_128nobal = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), SamplewiseCenter(), RandomFlip(), ToTensor()])
 
-basic_512 = transforms.Compose([BinarizeMask(),
-                                Resize(size=(512,512,1)), 
+basic_512 = transforms.Compose([Resize(size=(512,512,1)), 
                                 RescaleUnit(), 
                                 SamplewiseCenter(), 
                                 RandomFlip(), 
