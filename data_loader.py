@@ -135,6 +135,266 @@ class PredLoader(Dataset):
             sample = self.transform(sample)
 
         return sample
+    
+    
+class CellCropDataset(Dataset):
+    '''Load input images for prediction, performing structured crops to 
+    provide a consistent testing set.
+    '''
+
+    def __init__(self, 
+                 img_dir,
+                 mask_dir,
+                 transform_pre=None,
+                 transform_post=None,
+                 dtype='uint16', 
+                 img_regex='*',
+                 mask_regex='*',
+                 n_windows=4,
+                 symlinks=True):
+        '''
+        Parameters
+        ----------
+        img_dir : str
+            path to image inputs
+        transform_pre : callable
+            transform to apply prior to cutting images into windows.
+        transform_post : callable
+            transform to apply after cutting images into windows.
+        dtype : str
+            dtype of images
+        img_regex : str
+            pattern to glob image filenames
+        n_windows : int
+            number of panels to split the pre-split transformed
+            image into. Must be a perfect square.
+        '''
+        
+        self.img_dir = img_dir
+        self.mask_dir = mask_dir
+        self.transform_pre = transform_pre
+        self.transform_post = transform_post
+        self.img_regex = img_regex
+        self.mask_regex = mask_regex
+        self.imgs  = sorted(glob.glob(os.path.join(img_dir, self.img_regex)))
+        self.masks = sorted(glob.glob(os.path.join(mask_dir, self.mask_regex)))
+        self.dtype = dtype
+        self.n_windows = n_windows
+        
+        self.symlinks = symlinks
+        
+        if self.symlinks:
+            self.imgs = [os.path.realpath(x) for x in self.imgs]
+            self.masks = [os.path.realpath(x) for x in self.masks]
+
+    def __len__(self):
+        '''Each window is a sample'''
+        return len(self.imgs) * self.n_windows
+
+    def _imload(self, imp):
+        '''Load images using PIL or skimage.io'''
+        if imp[-4:] == '.tif':
+            image = np.array(Image.open(imp))
+        else:
+            image = imread(imp)
+        return image
+    
+    def _split_windows(self, sample):
+        '''
+        Parameters
+        ----------
+        sample : dict
+            keys `image` and `mask`, np.ndarrays of [H, W, C]
+        
+        Returns
+        -------
+        windows : list
+            np.ndarrays of [H, W, C] of image windows in the order
+            of left to right, top to bottom.
+        '''
+        image, mask = sample['image'], sample['mask']
+        total_shape = np.array(image.shape)[:2]
+        
+        n_per_side = int(np.sqrt(self.n_windows))
+        sz_per_side = total_shape // n_per_side
+        h_sz, w_sz = sz_per_side
+        image_windows = []
+        mask_windows = []
+        # perform a right to left, top to bottom raster of windows
+        for i in range(self.n_windows):
+            iw = image[(i//n_per_side)*h_sz:((i//n_per_side)+1)*h_sz,
+                       (i%n_per_side)*h_sz:((i%n_per_side)+1)*h_sz]
+            im = mask[(i//n_per_side)*h_sz:((i//n_per_side)+1)*h_sz,
+                      (i%n_per_side)*h_sz:((i%n_per_side)+1)*h_sz]
+            image_windows.append(iw)
+            mask_windows.append(im)
+        return image_windows, mask_windows
+
+    def __getitem__(self, idx):
+        '''
+        Parameters
+        ----------
+        idx : int
+            subimage ("window") to load.
+        
+        Returns
+        -------
+        samples : list
+            contains `self.n_windows` dicts, each keyed `image`
+            and `mask` for processing.
+            see `._split_windows` for ordering.
+        '''
+        iidx = idx // self.n_windows
+        image = self._imload(self.imgs[iidx])
+        mask = self._imload(self.masks[iidx])
+        
+        # mask may be uint16 if not preprocessed with ignore_index labels
+        if mask.dtype == 'uint16':
+            # convert to set of unique values
+            uniques = np.unique(mask)
+            for u in range(len(uniques)):
+                mask[mask == uniques[u]] == u
+            mask = mask.astype('uint8')
+        
+        if len(image.shape) < 3:
+            image = np.expand_dims(image, -1)
+        if len(mask.shape) < 3:
+            mask = np.expand_dims(mask, -1)
+        
+        sample = {'image':image, 'mask':mask}
+        
+        if self.transform_pre:
+            sample = self.transform_pre(sample)
+        
+        # break image into panels
+        image_windows, mask_windows = self._split_windows(sample)
+        
+        samples = [{'image': image_windows[i], 
+                    'mask' : mask_windows[i]} for i in range(len(image_windows))]
+        
+        sidx = idx % self.n_windows
+        sample = samples[sidx]
+        if self.transform_post:
+            sample = self.transform_post(sample)
+            
+        return sample
+    
+class PredCropLoader(Dataset):
+    '''Load only input images for predictions and split each image into a panel
+    of windows, size `crop`
+    '''
+
+    def __init__(self, 
+                 img_dir, 
+                 transform_pre=None,
+                 transform_post=None,
+                 dtype='uint16', 
+                 img_regex='*',
+                 n_windows=4):
+        '''
+        Parameters
+        ----------
+        img_dir : str
+            path to image inputs
+        transform_pre : callable
+            transform to apply prior to cutting images into windows.
+        transform_post : callable
+            transform to apply after cutting images into windows.
+        dtype : str
+            dtype of images
+        img_regex : str
+            pattern to glob image filenames
+        n_windows : int
+            number of panels to split the pre-split transformed
+            image into. Must be a perfect square.
+        '''
+        
+        self.img_dir = img_dir
+        self.transform_pre = transform_pre
+        self.transform_post = transform_post
+        self.img_regex = img_regex
+        self.imgs = glob.glob(os.path.join(img_dir, self.img_regex))
+        self.imgs.sort()
+        self.dtype = dtype
+        self.n_windows = n_windows
+
+    def __len__(self):
+        return len(self.imgs)
+
+    def _imload(self, imp):
+        '''Load images using PIL or skimage.io'''
+        if imp[-4:] == '.tif':
+            image = np.array(Image.open(imp))
+        else:
+            image = imread(imp)
+        return image
+    
+    def _split_windows(self, sample):
+        '''
+        Parameters
+        ----------
+        sample : dict
+            keys `image` and `mask`, np.ndarrays of [H, W, C]
+        
+        Returns
+        -------
+        windows : list
+            np.ndarrays of [H, W, C] of image windows in the order
+            of left to right, top to bottom.
+        '''
+        image = sample['image']
+        total_shape = np.array(image.shape)[:2]
+        
+        n_per_side = int(np.sqrt(self.n_windows))
+        sz_per_side = total_shape // n_per_side
+        h_sz, w_sz = sz_per_side
+        windows = []
+        # perform a right to left, top to bottom raster of windows
+        for i in range(self.n_windows):
+            w = image[(i//n_per_side)*h_sz:((i//n_per_side)+1)*h_sz,
+                      (i%n_per_side)*h_sz:((i%n_per_side)+1)*h_sz]
+            windows.append(w)
+        return windows
+
+    def __getitem__(self, idx):
+        '''
+        Parameters
+        ----------
+        idx : int
+            image to load.
+        
+        Returns
+        -------
+        samples : list
+            contains `self.n_windows` dicts, each keyed `image`
+            and `mask` for processing.
+            see `._split_windows` for ordering.
+        '''
+        image = self._imload(self.imgs[idx])
+        mask = np.zeros(image.shape).astype('uint8')
+        if len(image.shape) < 3:
+            image = np.expand_dims(image, -1)
+        if len(mask.shape) < 3:
+            mask = np.expand_dims(mask, -1)
+        
+        sample = {'image':image, 'mask':mask}
+        
+        if self.transform_pre:
+            sample = self.transform_pre(sample)
+        
+        # break image into panels
+        windows = self._split_windows(sample)
+        
+        samples = [{'image':windows[i], 'mask':np.zeros_like(windows[i])} for i in range(len(windows))]
+        
+        if self.transform_post:
+            new_samples = []
+            for i, s in enumerate(samples):
+                s = self.transform_post(s)
+                new_samples.append(s)
+            samples = new_samples
+            
+        return samples
 
 class ToRGB(object):
     '''Converts 1-channel grayscale images to RGB'''
@@ -231,8 +491,9 @@ class RandomFlip(object):
 class RandomCrop(object):
     '''Randomly crops an image'''
     
-    def __init__(self, crop_sz=(512, 512)):
+    def __init__(self, crop_sz=(512, 512), min_mask_sum=0):
         self.crop_sz = np.array(crop_sz).astype('int')
+        self.min_mask_sum = min_mask_sum
         
     def __call__(self, sample):
         '''
@@ -242,22 +503,29 @@ class RandomCrop(object):
         '''
         image, mask = sample['image'], sample['mask']
         
-        max_hidx = image.shape[0] - crop_sz[0]
-        max_widx = image.shape[1] - crop_sz[1]
+        max_hidx = image.shape[0] - self.crop_sz[0]
+        max_widx = image.shape[1] - self.crop_sz[1]
         
-        hidx = np.random.choice(np.arange(max_hidx), size=1).astype('int')[0]
-        widx = np.random.choice(np.arange(max_widx), size=1).astype('int')[0]
+        find_idx = True
+        while find_idx: 
+          hidx = int(np.random.choice(np.arange(max_hidx), size=1).astype('int')[0])
+          widx = int(np.random.choice(np.arange(max_widx), size=1).astype('int')[0])
         
-        assert type(hidx) is int and type(widx) is int
-        assert hidx+crop_sz[0] < image.shape[0]
-        assert widx+crop_sz[1] < image.shape[1]
+          assert type(hidx) is int and type(widx) is int
+          assert hidx+self.crop_sz[0] < image.shape[0]
+          assert widx+self.crop_sz[1] < image.shape[1]
         
-        imageC = image[hidx : hidx + crop_sz[0],
-                       widx : widx + crop_sz[1],
+          imageC = image[hidx : hidx + self.crop_sz[0],
+                       widx : widx + self.crop_sz[1],
                       :] # leave channels alone
-        maskC  = mask[hidx : hidx + crop_sz[0],
-                      widx : widx + crop_sz[1],
+          maskC  = mask[hidx : hidx + self.crop_sz[0],
+                      widx : widx + self.crop_sz[1],
                       :] # leave channels alone
+          if maskC.sum() > self.min_mask_sum:
+            find_idx = False
+          if mask.sum() < 2*self.min_mask_sum:
+            find_idx = False
+
         sample = {'image':imageC, 'mask':maskC}
         return sample
         
@@ -506,4 +774,18 @@ basic_256 = transforms.Compose([Resize(size=(256,256,1)),
 basic_256v = transforms.Compose([Resize(size=(256,256,1)), 
                                 RescaleUnit(), 
                                 SamplewiseCenter(), 
+                                ToTensor()])
+
+
+
+crop512 = transforms.Compose([Resize(size=(1024,1024,1)),
+                               RandomCrop(crop_sz=(512,512)),
+                                RescaleUnit(),
+                                SamplewiseCenter(),
+                                RandomFlip(),
+                                ToTensor()])
+
+predcrop512_pre = transforms.Compose([Resize(size=(1024,1024,1))])
+predcrop512 = transforms.Compose([RescaleUnit(),
+                                SamplewiseCenter(),
                                 ToTensor()])

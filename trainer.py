@@ -185,8 +185,8 @@ class Trainer(object):
                 labels = labels.cuda()
             else:
                 pass
-            inputs.requires_grad_()
-            labels.requires_grad_()
+            inputs.requires_grad = True
+            labels.requires_grad = False
 
 
             # zero gradients

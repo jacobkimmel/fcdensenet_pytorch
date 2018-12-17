@@ -6,8 +6,9 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 import numpy as np
 from model import DenseNet103
-from data_loader import PredLoader, basic_256v
+from data_loader import PredCropLoader, predcrop512, predcrop512_pre
 import os
+import os.path as osp
 import glob
 import time
 import argparse
@@ -84,35 +85,32 @@ def main():
     parser.add_argument('in_dir', type=str, help='image directory of input images')
     parser.add_argument('out_dir', type=str, help='output directory for segmented images')
     parser.add_argument('models', type=str, nargs='+', help='paths to model weights. multiple models will be Ensembled.')
-    parser.add_argument('--img_regex', type=str, default='*', help='regular expression matching image filenames in `in_dir`')
-    parser.add_argument('--n_classes', type=int, default=3, help='number of classes in the output masks')
-    parser.add_argument('--min_smp', type=float, default=0.3, help='minimum softmax score for object pixels')
+    parser.add_argument('--img_glob', type=str, default='*', help='pattern to glob image filenames in `in_dir`')
+    parser.add_argument('--n_classes', type=int, default=2, help='number of classes in the output masks')
+    parser.add_argument('--min_smp', type=float, default=0.5, help='minimum softmax score for object pixels')
     parser.add_argument('--sz_min', type=float, default=10., help='minimum object size for post-processing')
     parser.add_argument('--erod', default=False, help='size of disk selem for post-processing erosion')
     parser.add_argument('--dil', default=False, help='size of disk selem for post-processing dilation')
     parser.add_argument('--upsamp_sz', type=int, nargs=2, default=[2110, 2492], help='final size of upsampled mask')
     parser.add_argument('--quiet', action='store_true', default=False, help='suppress verbose output')
-    parser.add_argument('--batch', type=int, default=1, help='batch size for predictions')
 
     args = parser.parse_args()
 
     in_dir = args.in_dir
     out_dir = args.out_dir
     model_paths = args.models
-    img_regex = args.img_regex
+    img_glob = args.img_glob
     min_smp = args.min_smp
     sz_min = args.sz_min
     erod = int(args.erod)
     dil = int(args.dil)
     upsamp_sz = tuple(args.upsamp_sz)
     verbose = np.logical_not(args.quiet)
-    batch_size = int(args.batch)
 
     # Get image names
-    img_files = glob.glob(os.path.join(in_dir, img_regex))
-    img_files.sort()
-
-    img_names = [x.split('/')[-1][:-4] for x in img_files] # names w/o extensions
+    img_files = sorted(glob.glob(os.path.join(in_dir, img_glob)))
+    # names w/o extensions
+    img_names = [osp.splitext(osp.basename(x))[0] for x in img_files] 
 
     # Load models and build ensemble
     models = []
@@ -127,40 +125,64 @@ def main():
     ens = Ensemble(models)
     print('Models loaded.')
     # Set up data loaders
-    pl = PredLoader(in_dir, transform=basic_256v, dtype='uint16', img_regex=img_regex)
+    tr_pre = predcrop512_pre
+    tr_post = predcrop512
+    pl = PredCropLoader(in_dir, 
+                        transform_pre=tr_pre,
+                        transform_post=tr_post, 
+                        dtype='uint16', 
+                        img_regex=img_glob)
     print('Data loader initialized.')
     print(len(pl), ' images found.')
     # initialize softmax fnx
     sm = torch.nn.Softmax2d()
 
-
-    dl = DataLoader(pl, batch_size=batch_size, num_workers=6, shuffle=False)
-    iter_dl = iter(dl)
     # Segment images
     print('Segmenting...')
     times = []
-    for i in range(len(dl)):
+    for i in range(len(pl)):
         start = time.time()
-        batch = next(iter_dl)
-        inputs = batch['image']
-        s = pl[i]
-        img = s['image']
-        print(img.size())
-        outs = predict(ens, inputs)
-        probs = sm(outs)
-        probs = probs.cpu().data.numpy() # unpack to numpy array
+        
+        samples = pl[i] 
+        print('Number of samples %d' % len(samples))
+        
+        outs = [] # np.ndarrays of softmax probs
+        with torch.no_grad():
+            for d in samples:
+                input_panel = d['image'].unsqueeze(0) # add empty batch
+                print('Input panel size ', input_panel.size())
+                o = predict(ens, input_panel)
+                probs = sm(o)
+                probs = probs.cpu().data.numpy() # unpack to numpy array
+                outs.append(probs)
+            
+        # call a mask for each set of probs
+        mask_panels = []
+        for sm_panel in outs:
+            mask = post_process(sm_panel, 
+                                min_sm_prob=min_smp, 
+                                sz_min=sz_min, 
+                                erod=erod, 
+                                dil=dil)
+            mask_panels.append(mask)
 
-        for j in range(probs.shape[0]):
-            mask = post_process(probs[j:j+1,...], min_sm_prob=min_smp, sz_min=sz_min, erod=erod, dil=dil)
-            maskR = imresize(mask.astype('uint8'), upsamp_sz, interp='nearest') # upsample
-            maskR = maskR.astype('bool').astype('uint8')
-            # save upsamples mask
-            imsave(os.path.join(out_dir, img_names[i*batch_size + j] + '_densenet.png'), maskR*255)
-            if verbose:
-                print('Processed ', img_names[i*batch_size + j])
+        # reconstruct total mask from masks
+        mask_sz = mask_panels[0].shape
+        n_per_side = int(np.sqrt(len(mask_panels)))
+        total_mask = np.zeros((mask_sz[0]*n_per_side, mask_sz[1]*n_per_side))
+        for j in range(len(mask_panels)):
+            total_mask[(j//n_per_side)*mask_sz[0]:((j//n_per_side)+1)*mask_sz[0],
+                       (j% n_per_side)*mask_sz[1]:((j% n_per_side)+1)*mask_sz[1]] = mask_panels[j]
+        
+            
+            
+        maskR = imresize(total_mask.astype('uint8'), upsamp_sz, interp='nearest') # upsample
+        maskR = maskR.astype('bool').astype('uint8')
+        # save upsamples mask
+        imsave(os.path.join(out_dir, img_names[i] + '_densenet.png'), maskR*255)
+        if verbose:
+            print('Processed ', img_names[i])
         end = time.time()
-        print('Batch in ', end-start, 'seconds')
-        print('Image mean ', (end-start)/batch_size, 'seconds')
         times.append(end-start)
 
     print('Average image processing time : ', np.mean(times))
