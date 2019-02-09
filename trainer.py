@@ -98,6 +98,48 @@ def dice_loss_integer(input_, target, ignore_label=3, C=3):
 
     return dice_total
 
+from torch.autograd import Variable
+
+class FocalLoss(nn.Module):
+    '''
+    Credit:
+    https://github.com/clcarwin/focal_loss_pytorch/blob/master/focalloss.py
+    '''
+    def __init__(self, gamma=2., alpha=None, size_average=True):
+        super(FocalLoss, self).__init__()
+        self.gamma = gamma
+        self.alpha = alpha
+        if isinstance(alpha,(float,int,long)):
+            self.alpha = torch.Tensor([alpha,1-alpha])
+        if isinstance(alpha,list):
+            self.alpha = torch.Tensor(alpha)
+        self.size_average = size_average
+
+    def forward(self, input, target):
+        if input.dim()>2:
+            input = input.view(input.size(0),input.size(1),-1) # N,C,H,W => N,C,H*W
+            input = input.transpose(1,2) # N,C,H*W => N,H*W,C
+            input = input.contiguous().view(-1,input.size(2)) # N,H*W,C => N*H*W,C
+        target = target.view(-1,1)
+
+        logpt = F.log_softmax(input)
+        logpt = logpt.gather(1,target)
+        logpt = logpt.view(-1)
+        pt = Variable(logpt.data.exp())
+
+        if self.alpha is not None:
+            if self.alpha.type()!=input.data.type():
+                self.alpha = self.alpha.type_as(input.data)
+            at = self.alpha.gather(0,target.data.view(-1))
+            logpt = logpt * Variable(at)
+
+        loss = -1 * (1-pt)**self.gamma * logpt
+        if self.size_average:
+            return loss.mean()
+        else:
+            return loss.sum()
+
+
 def tensor_norm(T):
     return (T - T.min())/(T-T.min()).max()
 
@@ -156,7 +198,7 @@ class Trainer(object):
         with open(self.log_path, 'w') as f:
             header = 'Epoch,Iter,Running_Loss,Mode\n'
             f.write(header)
-            
+
     def _save_train_viz(self, 
                         inputs: torch.Tensor, 
                         labels: torch.Tensor, 
@@ -166,7 +208,7 @@ class Trainer(object):
         I = inputs.cpu().detach().numpy()
         L = labels.cpu().detach().numpy()
         O = outputs.cpu().detach().numpy()
-        
+
         for b in range(1):
             imsave(os.path.join(self.out_path, 
                     self.training_state + '_inputs_e' \
@@ -182,6 +224,7 @@ class Trainer(object):
                     self.training_state + '_outputs_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
+
                   np.squeeze(O[b,...]))
 
     def train_epoch(self) -> None:
@@ -210,7 +253,7 @@ class Trainer(object):
                 print('output size: ', outputs.size())
                 self.last_output = outputs
                 print('preds size: ', preds.size())
-        
+
             loss = self.criterion(outputs, labels)
             if self.verbose:
                 print('batch loss: ', loss.data[0])
@@ -285,7 +328,7 @@ class Trainer(object):
             self.best_model_wts = self.model.state_dict()
             torch.save(self.model.state_dict(), os.path.join(self.out_path, 'model_weights_' + str(self.epoch).zfill(3) + '.pickle'))
         elif (self.epoch%self.save_freq == 0):
-            torch.save(self.model.state_dict(), 
+            torch.save(self.model.state_dict(),
                        os.path.join(self.out_path, 'model_weights_' + str(self.epoch).zfill(3) + '.pickle'))
 
         print('{} Loss : {:.4f}'.format('val', epoch_loss))
