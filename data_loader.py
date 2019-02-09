@@ -39,7 +39,9 @@ def resize_sample(sample, size=(512,512,1)):
 class CellDataset(Dataset):
     '''Cell Segmentation Dataset'''
 
-    def __init__(self, img_dir, mask_dir, transform=None, dtype='uint16', symlinks: bool=False):
+    def __init__(self, img_dir, mask_dir, transform=None, dtype='uint16', 
+                 symlinks: bool=False, 
+                 name_check: bool=False):
         '''
         Parameters
         ----------
@@ -51,10 +53,8 @@ class CellDataset(Dataset):
         self.img_dir = img_dir
         self.mask_dir = mask_dir
         self.transform = transform
-        self.imgs = glob.glob(os.path.join(img_dir, '*'))
-        self.masks = glob.glob(os.path.join(mask_dir, '*'))
-        self.imgs.sort()
-        self.masks.sort()
+        self.imgs = sorted(glob.glob(os.path.join(img_dir, '*')))
+        self.masks = sorted(glob.glob(os.path.join(mask_dir, '*')))
         self.dtype = dtype
         self.symlinks = symlinks
         
@@ -63,6 +63,12 @@ class CellDataset(Dataset):
             self.masks = [os.path.realpath(x) for x in self.masks]
 
         assert len(self.imgs) == len(self.masks),'Mismatched img and mask numbers'
+        
+        if name_check:
+            img_names = [os.path.splitext(os.path.basename(x))[0] for x in self.imgs]
+            mask_names = [os.path.basename(x).split('_mask')[0] for x in self.masks]
+            same = [True if img_names[i] == mask_names[i] else False for i in range(len(img_names))]
+            assert np.all(same)
 
     def __len__(self):
         return len(self.imgs)
@@ -763,6 +769,11 @@ basic_512 = transforms.Compose([Resize(size=(512,512,1)),
                                 RescaleUnit(), 
                                 SamplewiseCenter(), 
                                 RandomFlip(), 
+                                ToTensor()])
+
+basic_512v = transforms.Compose([Resize(size=(512,512,1)), 
+                                RescaleUnit(), 
+                                SamplewiseCenter(), 
                                 ToTensor()])
 
 basic_256 = transforms.Compose([Resize(size=(256,256,1)), 

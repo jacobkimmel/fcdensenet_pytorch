@@ -6,6 +6,7 @@ import shutil
 import numpy as np
 
 import torch
+import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
 import sys
@@ -58,7 +59,7 @@ def dice_loss_integer(input_, target, ignore_label=3, C=3):
     target : torch.autograd.Variable
         integer label representation of the ground truth, same size as the input.
     ignore_label : integer.
-        Must be final label in the sequence (to do, generalize).
+        Must be final label in the sequence (TODO, generalize).
     C : integer.
         number of classes (including an ignored label if present!)
 
@@ -156,7 +157,11 @@ class Trainer(object):
             header = 'Epoch,Iter,Running_Loss,Mode\n'
             f.write(header)
             
-    def _save_train_viz(inputs, labels, outputs, iteration):
+    def _save_train_viz(self, 
+                        inputs: torch.Tensor, 
+                        labels: torch.Tensor, 
+                        outputs: torch.Tensor, 
+                        iteration: int) -> None:
         '''save visualizations of training'''
         I = inputs.cpu().detach().numpy()
         L = labels.cpu().detach().numpy()
@@ -164,16 +169,22 @@ class Trainer(object):
         
         for b in range(1):
             imsave(os.path.join(self.out_path, 
-                    'inputs_e' + str(self.epoch).zfill(4) + '_i' + str(iteration).zfill(4) + '.png'),
-                  np.squeeze(I[b,...]))
+                    self.training_state + '_inputs_e' \
+                                + str(self.epoch).zfill(4) \
+                                + '_i' + str(iteration).zfill(4) + '.png'),
+                  np.squeeze(I[b,0,...]))
             imsave(os.path.join(self.out_path, 
-                    'labels_e' + str(self.epoch).zfill(4) + '_i' + str(iteration).zfill(4) + '.png'),
-                  np.squeeze(L[b,...]))
+                    self.training_state + '_labels_e' \
+                                + str(self.epoch).zfill(4) \
+                                + '_i' + str(iteration).zfill(4) + '.png'),
+                  np.squeeze(L[b,0,...]))
             imsave(os.path.join(self.out_path, 
-                    'outputs_e' + str(self.epoch).zfill(4) + '_i' + str(iteration).zfill(4) + '.png'),
+                    self.training_state + '_outputs_e' \
+                                + str(self.epoch).zfill(4) \
+                                + '_i' + str(iteration).zfill(4) + '.png'),
                   np.squeeze(O[b,...]))
 
-    def train_epoch(self):
+    def train_epoch(self) -> None:
         # Run a train and validation phase for each epoch
         self.model.train(True)
         i = 0
@@ -219,7 +230,7 @@ class Trainer(object):
                 with open(self.log_path, 'a') as f:
                     f.write(str(self.epoch) + ',' + str(i) + ',' + str(running_loss / (i + 1)) + ',train\n')
                 if self.viz:
-                    self._save_train_viz(inputs, labels, outputs, i)
+                    self._save_train_viz(inputs, labels, preds, i)
             i += 1
 
         epoch_loss = running_loss / len(self.dataloaders['train'])
@@ -229,7 +240,7 @@ class Trainer(object):
 
         print('{} Loss : {:.4f}'.format('train', epoch_loss))
 
-    def val_epoch(self):
+    def val_epoch(self) -> None:
         self.model.eval()
         self.optimizer.zero_grad()
         i = 0
@@ -260,6 +271,8 @@ class Trainer(object):
                 # append to log
                 with open(self.log_path, 'a') as f:
                     f.write(str(self.epoch) + ',' + str(i) + ',' + str(running_loss / (i + 1)) + ',val\n')
+                if self.viz:
+                    self._save_train_viz(inputs, labels, preds, i)
             i += 1
 
         epoch_loss = running_loss / len(self.dataloaders['val'])
@@ -278,7 +291,7 @@ class Trainer(object):
         print('{} Loss : {:.4f}'.format('val', epoch_loss))
 
 
-    def train(self):
+    def train(self) -> nn.Module:
         for epoch in range(self.n_epochs):
             self.epoch = epoch
             print('Epoch {}/{}'.format(epoch, self.n_epochs - 1))
@@ -286,7 +299,9 @@ class Trainer(object):
             # run training epoch
             if self.scheduler is not None:
                 self.scheduler.step()
+            self.training_state = 'train'
             self.train_epoch()
+            self.training_state = 'val'
             with torch.no_grad():
                 self.val_epoch()
 

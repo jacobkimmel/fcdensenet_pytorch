@@ -2,7 +2,6 @@
 Utility functions
 '''
 import torch
-from torch.autograd import Variable
 
 def make_one_hot(labels, C=2):
     '''
@@ -10,7 +9,7 @@ def make_one_hot(labels, C=2):
 
     Parameters
     ----------
-    labels : torch.autograd.Variable of torch.cuda.LongTensor
+    labels : torch.LongTensor
         N x 1 x H x W, where N is batch size.
         Each value is an integer representing correct classification.
     C : integer.
@@ -18,12 +17,13 @@ def make_one_hot(labels, C=2):
 
     Returns
     -------
-    target : torch.autograd.Variable of torch.cuda.FloatTensor
+    target : torch.FloatTensor
         N x C x H x W, where C is class number. One-hot encoded.
     '''
-    one_hot = torch.cuda.FloatTensor(labels.size(0), C, labels.size(2), labels.size(3)).zero_()
+    if labels.is_cuda:
+        one_hot = torch.cuda.FloatTensor(labels.size(0), C, labels.size(2), labels.size(3)).zero_()
+    else:
+        one_hot = torch.FloatTensor(labels.size(0), C, labels.size(2), labels.size(3)).zero_()
     target = one_hot.scatter_(1, labels.data, 1)
-
-    target = Variable(target)
-
+    assert labels.is_cuda == target.is_cuda, 'target & labels disagree on CUDA status'
     return target
