@@ -47,7 +47,59 @@ def crossentropy2d(pred, target, weight=None, ignore_index=2, size_average=True)
     return loss
 
 # Dice loss from Roger Trullo
-# https://github.com/rogertrullo/pytorch/blob/rogertrullo-dice_loss/torch/nn/functional.py#L708
+# 
+
+class DiceLoss(nn.Module):
+    
+    def __init__(self, ignore_label: int=3, C: int=3) -> None:
+        '''
+        Computes a Dice loss from 2D input of class scores and a target of integer labels.
+
+        Parameters
+        ----------
+        ignore_label : integer.
+            Must be final label in the sequence (TODO, generalize).
+        C : integer.
+            number of classes (including an ignored label if present!)
+            
+        Notes
+        -----
+        Credit to Roger Trullo
+        https://github.com/rogertrullo/pytorch/blob/rogertrullo-dice_loss/torch/nn/functional.py#L708        
+        '''
+        super(DiceLoss, self).__init__()
+        self.ignore_label = ignore_label
+        self.C = C
+        return
+    
+    def forward(self, input_, target) -> float:
+        target = utils.make_one_hot(target, C=self.C)
+        # subindex target without the ignore label
+        target = target[:,:self.ignore_label,...]
+
+        assert input_.size() == target.size(), "Input sizes must be equal."
+        assert input_.dim() == 4, "Input must be a 4D Tensor."
+
+        probs=F.softmax(input_, dim=1)
+        num=probs*target#b,c,h,w--p*g
+        num=torch.sum(num,dim=3)#b,c,h
+        num=torch.sum(num,dim=2)
+
+        den1=probs*probs#--p^2
+        den1=torch.sum(den1,dim=3)#b,c,h
+        den1=torch.sum(den1,dim=2)
+
+        den2=target*target#--g^2
+        den2=torch.sum(den2,dim=3)#b,c,h
+        den2=torch.sum(den2,dim=2)#b,c
+
+        dice=2*(num/(den1+den2))
+        dice_eso=dice[:,1:]#we ignore bg dice val, and take the fg
+
+        dice_total=-1*torch.sum(dice_eso)/dice_eso.size(0)#divide by batch_sz
+
+        return dice_total
+    
 def dice_loss_integer(input_, target, ignore_label=3, C=3):
     """
     Computes a Dice loss from 2D input of class scores and a target of integer labels.
@@ -58,10 +110,6 @@ def dice_loss_integer(input_, target, ignore_label=3, C=3):
         size B x C x H x W representing class scores.
     target : torch.autograd.Variable
         integer label representation of the ground truth, same size as the input.
-    ignore_label : integer.
-        Must be final label in the sequence (TODO, generalize).
-    C : integer.
-        number of classes (including an ignored label if present!)
 
     Returns
     -------
@@ -109,7 +157,7 @@ class FocalLoss(nn.Module):
         super(FocalLoss, self).__init__()
         self.gamma = gamma
         self.alpha = alpha
-        if isinstance(alpha,(float,int,long)):
+        if isinstance(alpha,(float,int,)): # long is removed in Python3
             self.alpha = torch.Tensor([alpha,1-alpha])
         if isinstance(alpha,list):
             self.alpha = torch.Tensor(alpha)
@@ -190,6 +238,7 @@ class Trainer(object):
         self.best_loss = 1.0e10
         self.scheduler = scheduler
         self.viz = viz
+        self.print_iter = 10
 
         if not os.path.exists(self.out_path):
             os.mkdir(self.out_path)
@@ -256,7 +305,7 @@ class Trainer(object):
 
             loss = self.criterion(outputs, labels)
             if self.verbose:
-                print('batch loss: ', loss.data[0])
+                print('batch loss: ', loss.item())
             assert np.isnan(loss.data.cpu().numpy()) == False, 'NaN loss encountered in training'
 
             # backward pass
@@ -266,7 +315,7 @@ class Trainer(object):
             # statistics update
             running_loss += loss.detach().item() / inputs.size(0)
 
-            if i % 100 == 0:
+            if i % self.print_iter == 0:
                 print('Iter : ', i)
                 print('running_loss : ', running_loss / (i + 1))
                 # append to log
@@ -304,11 +353,13 @@ class Trainer(object):
             outputs = self.model(inputs)
             _, preds = torch.max(outputs.data, 1)
             loss = self.criterion(outputs, labels)
+            if self.verbose:
+                print('batch loss: ', loss.item())
 
             # statistics update
             running_loss += loss.detach().item() / inputs.size(0)
 
-            if i % 100 == 0:
+            if i % self.print_iter == 0:
                 print('Iter : ', i)
                 print('running_loss : ', running_loss / (i + 1))
                 # append to log

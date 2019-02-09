@@ -3,20 +3,19 @@ import torch
 import torch.nn as nn
 import os
 import os.path as osp
+import glob
 import configargparse
+import datetime
 
-import trainer
-import data_loader
-from model import DenseNet103
-
-def mkdir_f(d):
+def mkdir_f(f):
     if not os.path.exists(f):
         os.mkdir(f)
 
 def symlink_train_test(input_image_dir: str,
                   image_glob: str,
                   input_mask_dir: str,
-                  mask_glob: str,) -> None:
+                  mask_glob: str,
+                  expname: str) -> None:
     '''Copy symlinks to `train` and `test` subdirs within the
     input directories. This allows for random training splits without
     copying files.
@@ -28,12 +27,19 @@ def symlink_train_test(input_image_dir: str,
     input_mask_dir : str
         path to input mask files.
     '''
+    print('Searching for images in\n %s' % input_image_dir)
+    print('Searching for masks in\n %s' % input_mask_dir)
+
+    training_set_fraction = 0.90
     imgs = sorted(glob.glob(osp.join(input_image_dir, image_glob)))
     masks = sorted(glob.glob(osp.join(input_mask_dir, mask_glob)))
     assert len(imgs) == len(masks), \
         'imgs %d and masks %d have unequal numbers' % (len(imgs), len(masks))
     print('Loaded imgs %d and masks %d.'% (len(imgs), len(masks)))
+    assert len(imgs) > 0, 'no images/masks found!'
 
+    data_dir = osp.split(input_image_dir)[0] # image dir parent will be used for traintest
+    
     # Choose random indices for the train set
     n_train = int(np.floor(training_set_fraction*len(imgs)))
     train_idx = np.random.choice(
@@ -45,10 +51,14 @@ def symlink_train_test(input_image_dir: str,
 
     train_path = osp.join(data_dir, 'train_'+expname)
     test_path = osp.join(data_dir, 'test_'+expname)
+    
+    img_dir_prefix = 'images'
+    mask_dir_prefix = 'masks'
+    
     mkdir_f(train_path)
     mkdir_f(test_path)
     for tp in [train_path, test_path]:
-        for d in ['images', 'masks']:
+        for d in [img_dir_prefix, mask_dir_prefix]:
             mkdir_f(osp.join(tp, d))
 
     print('Clearing train test...')
@@ -68,38 +78,54 @@ def symlink_train_test(input_image_dir: str,
         os.symlink(masks[test_idx[i]],
             osp.join(test_path, mask_dir_prefix, osp.split(masks[test_idx[i]])[-1] ))
     print('Symlinking finished.')
-    return
+    return train_path, test_path
 
-def train(args):
+def train_model(args):
+    import trainer
+    import data_loader
+    from model import DenseNet103
+
     assert args.output_path is not None
     assert args.input_image_dir is not None
     assert args.input_mask_dir is not None
 
     if args.loss.lower() == 'dice':
-        criterion = trainer.dice_loss_integer
+        criterion = trainer.DiceLoss(C=args.n_classes)
     elif args.loss.lower() == 'focal':
         criterion = trainer.FocalLoss()
 
     if args.transform.lower() == 'crop512raw':
-        transform = data_loader.crop512raw
+        transform_train = data_loader.crop512raw
+        transform_test_pre   = None
+        transform_test_post  = data_loader.predcrop512
     elif args.transform.lower() == 'crop512':
-        transform = data_loader.crop512
+        transform_train = data_loader.crop512
+        transform_test_pre   = data_loader.predcrop512_pre
+        transform_test_post  = data_loader.predcrop512
 
-    training_set_fraction = 0.90
-
-    symlink_train_test(args.input_image_dir,
+    if args.exp_name is not None:
+        exp_name = args.exp_name
+    else:
+        exp_name = datetime.datetime.today().strftime('%Y%m%d')
+        
+    train_path, test_path = symlink_train_test(
+                       args.input_image_dir,
                        args.image_glob,
                        args.input_mask_dir,
-                       args.mask_glob)
+                       args.mask_glob,
+                       exp_name)
 
     train_ds = data_loader.CellDataset(osp.join(train_path, 'images'),
                            osp.join(train_path, 'masks'),
-                           transform=transform,
+                           transform=transform_train,
                            symlinks=True)
 
-    test_ds = data_loader.CellDataset(osp.join(test_path, 'images'),
+    # use a consistent set of crops in the testing set
+    test_ds = data_loader.CellCropDataset(osp.join(test_path, 'images'),
                           osp.join(test_path, 'masks'),
-                          transform=transform,
+                          transform_pre=transform_test_pre,
+                          transform_post=transform_test_post,
+                          n_windows=16,
                           symlinks=True)
 
     train_dl = torch.utils.data.DataLoader(train_ds,
@@ -117,14 +143,18 @@ def train(args):
     model = DenseNet103(n_classes=args.n_classes)
     if torch.cuda.is_available():
         model = model.cuda()
+        print('Model moved to CUDA compute device.')
     else:
         print('No CUDA available, running on CPU!')
     print('Model loaded.')
 
-    optimizer = optim.RMSprop(model.parameters(),
+    optimizer = torch.optim.RMSprop(model.parameters(),
                         lr=args.lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer,
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
                     step_size=1, gamma=0.995)
+    
+    if not osp.exists(args.output_path):
+        os.mkdir(args.output_path)
 
     print('Training')
     trainer = trainer.Trainer(model,
@@ -132,10 +162,10 @@ def train(args):
                       optimizer,
                       dataloaders,
                       args.output_path,
-                      n_epochs=300,
-                      ignore_index = 3,
+                      n_epochs=args.n_epochs,
+                      ignore_index = args.n_classes+1,
                       scheduler=scheduler,
-                      verbose=False,
+                      verbose=True,
                       viz=False)
     trainer.train()
 
@@ -144,8 +174,8 @@ def predict(args):
 
 def main():
     parser = configargparse.ArgParser('Utilize FC-DenseNet PyTorch models.',
-        default_config_file=['./default_config.txt'])
-    parser.add_argument('--config', is_config_file=True)
+        default_config_files=['./default_config.txt'])
+    parser.add_argument('--config', is_config_file=True,)
     parser.add_argument('--command', required=True, type=str,
         help='action to perform. {train, predict}')
     parser.add_argument('--input_image_dir', type=str, default=None)
@@ -154,12 +184,15 @@ def main():
     parser.add_argument('--mask_glob', type=str, default='*.png')
     parser.add_argument('--output_path', type=str, default=None)
     parser.add_argument('--loss', type=str, default='dice')
+    parser.add_argument('--n_classes', type=int, default=2,
+        help='number of classes in the target masks')
     parser.add_argument('--transform', type=str, default='crop512raw')
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--n_epochs', type=int, default=500)
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--model_weights', type=str, default=None,
         help='path to trained model weights. Required for prediction.')
+    parser.add_argument('--exp_name', type=str, default=None)
     args = parser.parse_args()
 
     if args.command.lower() == 'train':
