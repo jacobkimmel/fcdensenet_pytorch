@@ -39,15 +39,34 @@ def resize_sample(sample, size=(512,512,1)):
 class CellDataset(Dataset):
     '''Cell Segmentation Dataset'''
 
-    def __init__(self, img_dir, mask_dir, transform=None, dtype='uint16', 
+    def __init__(self, 
+                 img_dir: str,
+                 mask_dir: str, 
+                 transform=None, 
+                 dtype: str='uint16', 
                  symlinks: bool=False, 
-                 name_check: bool=False):
+                 name_check: bool=False,
+                 samples_per_image: int=1):
         '''
         Parameters
         ----------
-        img_dir : string. path to directory containing input images.
-        mask_dir : string. path to directory containing ground truth masks.
-        self.transform : callable. Optional transformer for samples.
+        img_dir : str
+            path to directory containing input images.
+        mask_dir : str
+            path to directory containing ground truth masks.
+        transform : Callable
+            Optional transformer for samples.
+        dtype : str
+            input data type using numpy syntax.
+        symlinks : bool
+            inputs are symlink paths.
+        name_check : bool
+            perform a check to ensure names match a format of 
+            "img_name.EXT" <> "img_name_mask.EXT"
+        samples_per_image : int
+            number of samples to yield per image.
+            set to 1 unless performing a transform that randomizes input
+            images in some dramatic way (i.e. cropping subwindows).
         '''
 
         self.img_dir = img_dir
@@ -57,6 +76,7 @@ class CellDataset(Dataset):
         self.masks = sorted(glob.glob(os.path.join(mask_dir, '*')))
         self.dtype = dtype
         self.symlinks = symlinks
+        self.samples_per_image = samples_per_image
 
         if self.symlinks:
             self.imgs = [os.path.realpath(x) for x in self.imgs]
@@ -71,7 +91,7 @@ class CellDataset(Dataset):
             assert np.all(same)
 
     def __len__(self):
-        return len(self.imgs)
+        return int(len(self.imgs)*self.samples_per_image)
 
     def _imload(self, imp):
         '''Load images using tifffile or PIL'''
@@ -82,6 +102,10 @@ class CellDataset(Dataset):
         return image
 
     def __getitem__(self, idx):
+        '''Fetch a sample'''
+        if self.samples_per_image > 1:
+            # set to appropriate place in the index
+            idx = idx % len(imgs)
         image = self._imload(self.imgs[idx])
         mask = self._imload(self.masks[idx])
         # mask may be uint16 if not preprocessed with ignore_index labels
@@ -328,11 +352,11 @@ class PredCropLoader(Dataset):
         return len(self.imgs)
 
     def _imload(self, imp):
-        '''Load images using PIL or skimage.io'''
+        '''Load images using tifffile or PIL'''
         if imp[-4:] == '.tif':
-            image = np.array(Image.open(imp))
+            image = tifffile.TiffFile(imp).asarray()
         else:
-            image = imread(imp)
+            image = np.array(Image.open(imp))
         return image
 
     def _split_windows(self, sample):
@@ -514,23 +538,23 @@ class RandomCrop(object):
 
         find_idx = True
         while find_idx:
-          hidx = int(np.random.choice(np.arange(max_hidx), size=1).astype('int')[0])
-          widx = int(np.random.choice(np.arange(max_widx), size=1).astype('int')[0])
+            hidx = int(np.random.choice(np.arange(max_hidx), size=1).astype('int')[0])
+            widx = int(np.random.choice(np.arange(max_widx), size=1).astype('int')[0])
 
-          assert type(hidx) is int and type(widx) is int
-          assert hidx+self.crop_sz[0] < image.shape[0]
-          assert widx+self.crop_sz[1] < image.shape[1]
+            assert type(hidx) is int and type(widx) is int
+            assert hidx+self.crop_sz[0] < image.shape[0]
+            assert widx+self.crop_sz[1] < image.shape[1]
 
-          imageC = image[hidx : hidx + self.crop_sz[0],
+            imageC = image[hidx : hidx + self.crop_sz[0],
                        widx : widx + self.crop_sz[1],
                       :] # leave channels alone
-          maskC  = mask[hidx : hidx + self.crop_sz[0],
+            maskC  = mask[hidx : hidx + self.crop_sz[0],
                       widx : widx + self.crop_sz[1],
                       :] # leave channels alone
-          if maskC.sum() > self.min_mask_sum:
-            find_idx = False
-          if mask.sum() < 2*self.min_mask_sum:
-            find_idx = False
+            if maskC.sum() >= self.min_mask_sum:
+                find_idx = False
+            if mask.sum() <= 2*self.min_mask_sum:
+                find_idx = False
 
         sample = {'image':imageC, 'mask':maskC}
         return sample
@@ -604,8 +628,8 @@ basic_256v = transforms.Compose([Resize(size=(256,256,1)),
 
 
 
-crop512 = transforms.Compose([Resize(size=(1024,1024,1)),
-                               RandomCrop(crop_sz=(512,512)),
+crop512 = transforms.Compose([Resize(size=(2048,2048,1)),
+                               RandomCrop(crop_sz=(512,512), min_mask_sum=1),
                                 RescaleUnit(),
                                 SamplewiseCenter(),
                                 RandomFlip(),
@@ -619,7 +643,7 @@ crop512raw = transforms.Compose([
                               RandomFlip(),
                               ToTensor()])
 
-predcrop512_pre = transforms.Compose([Resize(size=(1024,1024,1))])
+predcrop512_pre = transforms.Compose([Resize(size=(2048,2048,1))])
 predcrop512 = transforms.Compose([
                                 BinarizeMask(),
                                 RescaleUnit(),

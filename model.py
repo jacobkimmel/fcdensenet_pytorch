@@ -7,7 +7,6 @@ from torchvision import models
 import numpy as np
 import copy
 
-
 class DenseLayer(nn.Module):
 
     def __init__(self, n_channels, growth_rate=16):
@@ -310,3 +309,20 @@ class DenseNet103(nn.Module):
         if self.verbose:
             print('Classif: ', classif.size())
         return classif
+
+class Ensemble(object):
+    '''Create an ensemble of models for predictions'''
+    def __init__(self, models):
+        '''
+        models : list. list of model objects with a callable .forward() method.
+        '''
+        self.models = models
+
+    def __call__(self, inputs):
+        '''Return the mean prediction of all models in `models`'''
+        outs = []
+        for m in self.models:
+            outs.append(m(inputs))
+        output = torch.stack(outs)
+        output = output.sum(0)/len(outs)
+        return output

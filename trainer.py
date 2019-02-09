@@ -196,10 +196,20 @@ class Trainer(object):
     Trains a model
     '''
 
-    def __init__(self, model, criterion, optimizer,
-                dataloaders, out_path, n_epochs=50, ignore_index=2,
-                use_gpu=torch.cuda.is_available(), verbose=False, save_freq = 10,
-                scheduler = None, viz: bool=False):
+    def __init__(self, 
+                model, 
+                criterion, 
+                optimizer,
+                dataloaders: dict, 
+                out_path: str, 
+                n_epochs: int=50, 
+                ignore_index: int=2,
+                use_gpu: bool=torch.cuda.is_available(), 
+                verbose: bool=False, 
+                save_freq: int=10,
+                scheduler = None, 
+                viz: bool=False, 
+                val_occupied_only: bool=False):
 
         '''
         Trains a PyTorch `nn.Module` object provided in `model`
@@ -223,6 +233,11 @@ class Trainer(object):
         save_freq : integer. Number of epochs between model checkpoints. Default = 10.
         scheduler : learning rate scheduler.
         viz: bool. save visualizations of segmentation performance with print outputs.
+        print_iter : int
+            number of iterations between print outputs.
+        val_occupied_only : bool
+            if True, calculate validation statistics only for panels where
+            foreground classes are actually present.
         '''
         self.model = model
         self.optimizer = optimizer
@@ -238,7 +253,9 @@ class Trainer(object):
         self.best_loss = 1.0e10
         self.scheduler = scheduler
         self.viz = viz
-        self.print_iter = 10
+        self.print_iter = 50
+        # only save validation metrics for subpanels that have foreground classes
+        self.val_occupied_only = True 
 
         if not os.path.exists(self.out_path):
             os.mkdir(self.out_path)
@@ -263,18 +280,18 @@ class Trainer(object):
                     self.training_state + '_inputs_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
-                  np.squeeze(I[b,0,...]))
+                  np.squeeze(I[b,0,...])*255)
             imsave(os.path.join(self.out_path, 
                     self.training_state + '_labels_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
-                  np.squeeze(L[b,0,...]))
+                  np.squeeze(L[b,0,...])*255)
             imsave(os.path.join(self.out_path, 
                     self.training_state + '_outputs_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
 
-                  np.squeeze(O[b,...]))
+                  np.squeeze(O[b,...])*255)
 
     def train_epoch(self) -> None:
         # Run a train and validation phase for each epoch
@@ -339,6 +356,7 @@ class Trainer(object):
         running_loss = 0.0
         running_corrects = 0.0
         running_total = 0.0
+        counted_panels = 0
         for data in self.dataloaders['val']:
             inputs, labels = data['image'], data['mask']
             if self.use_gpu:
@@ -357,7 +375,9 @@ class Trainer(object):
                 print('batch loss: ', loss.item())
 
             # statistics update
-            running_loss += loss.detach().item() / inputs.size(0)
+            if labels.sum() > 0 or (not self.val_occupied_only):
+                running_loss += loss.detach().item() / inputs.size(0)
+                counted_panels += 1
 
             if i % self.print_iter == 0:
                 print('Iter : ', i)
@@ -369,7 +389,7 @@ class Trainer(object):
                     self._save_train_viz(inputs, labels, preds, i)
             i += 1
 
-        epoch_loss = running_loss / len(self.dataloaders['val'])
+        epoch_loss = running_loss / counted_panels
         # append to log
         with open(self.log_path, 'a') as f:
             f.write(str(self.epoch) + ',' + str(i) + ',' + str(running_loss / (i + 1)) + ',val_epoch\n')
