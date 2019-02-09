@@ -57,7 +57,7 @@ class CellDataset(Dataset):
         self.masks.sort()
         self.dtype = dtype
         self.symlinks = symlinks
-        
+
         if self.symlinks:
             self.imgs = [os.path.realpath(x) for x in self.imgs]
             self.masks = [os.path.realpath(x) for x in self.masks]
@@ -129,25 +129,25 @@ class PredLoader(Dataset):
             image = np.expand_dims(image, -1)
         if len(mask.shape) < 3:
             mask = np.expand_dims(mask, -1)
-        
+
         sample = {'image':image, 'mask':mask}
         if self.transform:
             sample = self.transform(sample)
 
         return sample
-    
-    
+
+
 class CellCropDataset(Dataset):
-    '''Load input images for prediction, performing structured crops to 
+    '''Load input images for prediction, performing structured crops to
     provide a consistent testing set.
     '''
 
-    def __init__(self, 
+    def __init__(self,
                  img_dir,
                  mask_dir,
                  transform_pre=None,
                  transform_post=None,
-                 dtype='uint16', 
+                 dtype='uint16',
                  img_regex='*',
                  mask_regex='*',
                  n_windows=4,
@@ -169,7 +169,7 @@ class CellCropDataset(Dataset):
             number of panels to split the pre-split transformed
             image into. Must be a perfect square.
         '''
-        
+
         self.img_dir = img_dir
         self.mask_dir = mask_dir
         self.transform_pre = transform_pre
@@ -180,9 +180,9 @@ class CellCropDataset(Dataset):
         self.masks = sorted(glob.glob(os.path.join(mask_dir, self.mask_regex)))
         self.dtype = dtype
         self.n_windows = n_windows
-        
+
         self.symlinks = symlinks
-        
+
         if self.symlinks:
             self.imgs = [os.path.realpath(x) for x in self.imgs]
             self.masks = [os.path.realpath(x) for x in self.masks]
@@ -198,14 +198,14 @@ class CellCropDataset(Dataset):
         else:
             image = imread(imp)
         return image
-    
+
     def _split_windows(self, sample):
         '''
         Parameters
         ----------
         sample : dict
             keys `image` and `mask`, np.ndarrays of [H, W, C]
-        
+
         Returns
         -------
         windows : list
@@ -214,7 +214,7 @@ class CellCropDataset(Dataset):
         '''
         image, mask = sample['image'], sample['mask']
         total_shape = np.array(image.shape)[:2]
-        
+
         n_per_side = int(np.sqrt(self.n_windows))
         sz_per_side = total_shape // n_per_side
         h_sz, w_sz = sz_per_side
@@ -236,7 +236,7 @@ class CellCropDataset(Dataset):
         ----------
         idx : int
             subimage ("window") to load.
-        
+
         Returns
         -------
         samples : list
@@ -247,7 +247,7 @@ class CellCropDataset(Dataset):
         iidx = idx // self.n_windows
         image = self._imload(self.imgs[iidx])
         mask = self._imload(self.masks[iidx])
-        
+
         # mask may be uint16 if not preprocessed with ignore_index labels
         if mask.dtype == 'uint16':
             # convert to set of unique values
@@ -255,40 +255,40 @@ class CellCropDataset(Dataset):
             for u in range(len(uniques)):
                 mask[mask == uniques[u]] == u
             mask = mask.astype('uint8')
-        
+
         if len(image.shape) < 3:
             image = np.expand_dims(image, -1)
         if len(mask.shape) < 3:
             mask = np.expand_dims(mask, -1)
-        
+
         sample = {'image':image, 'mask':mask}
-        
+
         if self.transform_pre:
             sample = self.transform_pre(sample)
-        
+
         # break image into panels
         image_windows, mask_windows = self._split_windows(sample)
-        
-        samples = [{'image': image_windows[i], 
+
+        samples = [{'image': image_windows[i],
                     'mask' : mask_windows[i]} for i in range(len(image_windows))]
-        
+
         sidx = idx % self.n_windows
         sample = samples[sidx]
         if self.transform_post:
             sample = self.transform_post(sample)
-            
+
         return sample
-    
+
 class PredCropLoader(Dataset):
     '''Load only input images for predictions and split each image into a panel
     of windows, size `crop`
     '''
 
-    def __init__(self, 
-                 img_dir, 
+    def __init__(self,
+                 img_dir,
                  transform_pre=None,
                  transform_post=None,
-                 dtype='uint16', 
+                 dtype='uint16',
                  img_regex='*',
                  n_windows=4):
         '''
@@ -308,7 +308,7 @@ class PredCropLoader(Dataset):
             number of panels to split the pre-split transformed
             image into. Must be a perfect square.
         '''
-        
+
         self.img_dir = img_dir
         self.transform_pre = transform_pre
         self.transform_post = transform_post
@@ -328,14 +328,14 @@ class PredCropLoader(Dataset):
         else:
             image = imread(imp)
         return image
-    
+
     def _split_windows(self, sample):
         '''
         Parameters
         ----------
         sample : dict
             keys `image` and `mask`, np.ndarrays of [H, W, C]
-        
+
         Returns
         -------
         windows : list
@@ -344,7 +344,7 @@ class PredCropLoader(Dataset):
         '''
         image = sample['image']
         total_shape = np.array(image.shape)[:2]
-        
+
         n_per_side = int(np.sqrt(self.n_windows))
         sz_per_side = total_shape // n_per_side
         h_sz, w_sz = sz_per_side
@@ -362,7 +362,7 @@ class PredCropLoader(Dataset):
         ----------
         idx : int
             image to load.
-        
+
         Returns
         -------
         samples : list
@@ -376,24 +376,24 @@ class PredCropLoader(Dataset):
             image = np.expand_dims(image, -1)
         if len(mask.shape) < 3:
             mask = np.expand_dims(mask, -1)
-        
+
         sample = {'image':image, 'mask':mask}
-        
+
         if self.transform_pre:
             sample = self.transform_pre(sample)
-        
+
         # break image into panels
         windows = self._split_windows(sample)
-        
+
         samples = [{'image':windows[i], 'mask':np.zeros_like(windows[i])} for i in range(len(windows))]
-        
+
         if self.transform_post:
             new_samples = []
             for i, s in enumerate(samples):
                 s = self.transform_post(s)
                 new_samples.append(s)
             samples = new_samples
-            
+
         return samples
 
 class ToRGB(object):
@@ -440,7 +440,7 @@ class BinarizeMask(object):
         sample = {'image':image, 'mask':mask}
         return sample
 
-        
+
 class ChangeLabels(object):
     '''Changes a mask label to another in arrays'''
 
@@ -487,34 +487,34 @@ class RandomFlip(object):
 
         sample = {'image':image, 'mask':mask}
         return sample
-    
+
 class RandomCrop(object):
     '''Randomly crops an image'''
-    
+
     def __init__(self, crop_sz=(512, 512), min_mask_sum=0):
         self.crop_sz = np.array(crop_sz).astype('int')
         self.min_mask_sum = min_mask_sum
-        
+
     def __call__(self, sample):
         '''
-        sample : dict 
+        sample : dict
             'image' : [H, W, C] np.ndarray
             'mask'  : [H, W] np.ndarray
         '''
         image, mask = sample['image'], sample['mask']
-        
+
         max_hidx = image.shape[0] - self.crop_sz[0]
         max_widx = image.shape[1] - self.crop_sz[1]
-        
+
         find_idx = True
-        while find_idx: 
+        while find_idx:
           hidx = int(np.random.choice(np.arange(max_hidx), size=1).astype('int')[0])
           widx = int(np.random.choice(np.arange(max_widx), size=1).astype('int')[0])
-        
+
           assert type(hidx) is int and type(widx) is int
           assert hidx+self.crop_sz[0] < image.shape[0]
           assert widx+self.crop_sz[1] < image.shape[1]
-        
+
           imageC = image[hidx : hidx + self.crop_sz[0],
                        widx : widx + self.crop_sz[1],
                       :] # leave channels alone
@@ -528,7 +528,7 @@ class RandomCrop(object):
 
         sample = {'image':imageC, 'mask':maskC}
         return sample
-        
+
 
 class SamplewiseCenter(object):
     '''Sets images to have 0 mean'''
@@ -556,10 +556,10 @@ class Resize(object):
                 chanR = imresize(np.squeeze(image[...,c]), self.sz)
                 chans.append(chanR)
             imageR = np.squeeze(np.stack(chans, axis=-1))
-            
+
         mask = mask.astype('uint8')
         maskR = imresize(np.squeeze(mask), self.sz, interp='nearest')
-        
+
         # reset mask to single integer labels
         for i in range(len(np.unique(maskR))):
             maskR[maskR == np.unique(maskR)[i]] = i
@@ -759,21 +759,21 @@ grayscale_128 = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), Sam
 grayscale_128val = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), SamplewiseCenter(), ToTensor()])
 grayscale_128nobal = transforms.Compose([Resize(size=(128,128,1)), RescaleUnit(), SamplewiseCenter(), RandomFlip(), ToTensor()])
 
-basic_512 = transforms.Compose([Resize(size=(512,512,1)), 
-                                RescaleUnit(), 
-                                SamplewiseCenter(), 
-                                RandomFlip(), 
+basic_512 = transforms.Compose([Resize(size=(512,512,1)),
+                                RescaleUnit(),
+                                SamplewiseCenter(),
+                                RandomFlip(),
                                 ToTensor()])
 
-basic_256 = transforms.Compose([Resize(size=(256,256,1)), 
-                                RescaleUnit(), 
-                                SamplewiseCenter(), 
-                                RandomFlip(), 
+basic_256 = transforms.Compose([Resize(size=(256,256,1)),
+                                RescaleUnit(),
+                                SamplewiseCenter(),
+                                RandomFlip(),
                                 ToTensor()])
 
-basic_256v = transforms.Compose([Resize(size=(256,256,1)), 
-                                RescaleUnit(), 
-                                SamplewiseCenter(), 
+basic_256v = transforms.Compose([Resize(size=(256,256,1)),
+                                RescaleUnit(),
+                                SamplewiseCenter(),
                                 ToTensor()])
 
 
@@ -784,6 +784,12 @@ crop512 = transforms.Compose([Resize(size=(1024,1024,1)),
                                 SamplewiseCenter(),
                                 RandomFlip(),
                                 ToTensor()])
+
+crop512raw = transforms.Compose([RandomCrop(crop_sz=(512,512)),
+                              RescaleUnit(),
+                              SamplewiseCenter(),
+                              RandomFlip(),
+                              ToTensor()])
 
 predcrop512_pre = transforms.Compose([Resize(size=(1024,1024,1))])
 predcrop512 = transforms.Compose([RescaleUnit(),
