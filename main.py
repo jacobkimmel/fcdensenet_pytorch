@@ -251,11 +251,11 @@ def predict(args):
         transform_pre   = data_loader.predcrop512_pre
         transform_post  = data_loader.predcrop512
     
-    pl = PredCropLoader(in_dir, 
+    pl = PredCropLoader(args.input_image_dir, 
                         transform_pre=tranform_pre,
                         transform_post=transform_post, 
                         dtype='uint16', 
-                        img_regex=img_glob,
+                        img_regex=args.img_glob,
                         n_windows=16)
 
     sm = torch.nn.Softmax2d()
@@ -311,36 +311,47 @@ def predict(args):
         end = time.time()
         times.append(end-start)
 
-        print('Average image processing time : ', np.mean(times))
+    print('Average image processing time : ', np.mean(times))
 
+    return
     
-    raise NotImplementedError()
-
 def main():
     parser = configargparse.ArgParser('Utilize FC-DenseNet PyTorch models.',
         default_config_files=['./default_config.txt'])
-    parser.add_argument('--config', is_config_file=True,)
+    parser.add_argument('--config', is_config_file=True,
+        help='path to a configuration file.')
     parser.add_argument('--command', required=True, type=str,
-        help='action to perform. {train, predict}')
-    parser.add_argument('--exp_name', type=str, default=None)
-    parser.add_argument('--input_image_dir', type=str, default=None)
-    parser.add_argument('--image_glob', type=str, default='*.tif')
-    parser.add_argument('--input_mask_dir', type=str, default=None)
-    parser.add_argument('--mask_glob', type=str, default='*.png')
-    parser.add_argument('--output_path', type=str, default=None)
-    parser.add_argument('--loss', type=str, default='dice')
+        help='action to perform. {train, predict}.')
+    parser.add_argument('--exp_name', type=str, default=None,
+        help='name of the experiment. defaults to the date in YYYYMMDD format.')
+    parser.add_argument('--input_image_dir', type=str, default=None,
+        help='path to input image files')
+    parser.add_argument('--image_glob', type=str, default='*.tif',
+        help='pattern to match image files.')
+    parser.add_argument('--input_mask_dir', type=str, default=None,
+        help='path to input mask files.')
+    parser.add_argument('--mask_glob', type=str, default='*.png',
+        help='pattern to match mask files.')
+    parser.add_argument('--output_path', type=str, default=None,
+        help='path for training or prediction outputs.')
+    parser.add_argument('--loss', type=str, default='focal',
+        help='loss function for model training. one of ["dice", "focal"].')
     parser.add_argument('--growth_rate', type=int, default=16,
-        help='number of feature maps to add in each DenseBlock')
+        help='number of feature maps to add in each DenseBlock.')
     parser.add_argument('--n_classes', type=int, default=2,
-        help='number of classes in the target masks')
-    parser.add_argument('--transform', type=str, default='crop512raw')
-    parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--n_epochs', type=int, default=500)
-    parser.add_argument('--lr', type=float, default=1e-4)
+        help='number of classes in the target masks.')
+    parser.add_argument('--transform', type=str, default='crop512',
+        help='tranformations to apply to input data. one of ["crop512", "crop512raw"].')
+    parser.add_argument('--batch_size', type=int, default=1,
+        help='bathc size for training.')
+    parser.add_argument('--n_epochs', type=int, default=500,
+        help='number of epochs for training')
+    parser.add_argument('--lr', type=float, default=1e-4,
+        help='learning rate for training using the RMSprop optimizer.')
     parser.add_argument('--model_weights', type=str, default=None,
         help='path to trained model weights. Required for prediction.')
     parser.add_argument('--upsamp_sz', type=int, nargs=2, default=[2110, 2492], 
-        help='final size of upsampled mask')
+        help='final size of upsampled mask.')
     args = parser.parse_args()
 
     if args.command.lower() == 'train':
