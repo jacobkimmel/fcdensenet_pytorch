@@ -16,7 +16,7 @@ def mkdir_f(f):
         os.mkdir(f)
 
 def build_transform(resize: tuple=(2048, 2048),
-                    crop_sz: tuple(512, 512),
+                    crop_sz: tuple=(512, 512),
                     crop_type: str='random',
                     method: str='scale_center',
                     flips: bool=True,
