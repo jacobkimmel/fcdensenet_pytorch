@@ -629,6 +629,7 @@ basic_256v = transforms.Compose([Resize(size=(256,256,1)),
 
 
 crop512 = transforms.Compose([Resize(size=(2048,2048,1)),
+                              BinarizeMask(),
                                RandomCrop(crop_sz=(512,512), min_mask_sum=1),
                                 RescaleUnit(),
                                 SamplewiseCenter(),

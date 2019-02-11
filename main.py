@@ -7,14 +7,67 @@ import glob
 import configargparse
 import datetime
 
-def mkdir_f(f):
-    if not os.path.exists(f):
-        os.mkdir(f)
-
 from scipy.misc import imresize
 from skimage.morphology import remove_small_objects, binary_erosion, binary_dilation, disk
 from skimage.io import imsave
 
+def mkdir_f(f):
+    if not os.path.exists(f):
+        os.mkdir(f)
+
+def build_transform(resize: tuple=(2048, 2048),
+                    crop_sz: tuple(512, 512),
+                    crop_type: str='random',
+                    method: str='scale_center',
+                    flips: bool=True,
+                    to_tensor: bool=True,):
+    '''Build a torchvision transform
+    
+    Parameters
+    ----------
+    resize : tuple
+        (int H, int W) for image resizing.
+    crop_sz : tuple
+        (int H, int W) for cropped windows.
+    crop_type : str
+        type of cropping to apply.
+    method : str
+        method for processing after normalization.
+        ['scale_center',]
+    flips : bool
+        apply random flipping.
+    to_tensor : bool
+        convert results to `torch.Tensor`.
+    
+    Returns
+    -------
+    transform : Callable
+    '''
+    from torchvision import transforms, utils
+    import data_loader
+    
+    fxns = []
+    if resize is not None:
+        rsz = data_loader.Resize(size=resize + (1,))
+        fxns.append(rsz)
+    if crop_type is not None:
+        crop = data_loader.RandomCrop(crop_sz=crop_sz, min_mask_sum=1)
+        fxns.append(crop)
+    if method.lower() == 'scale_center':
+        fxns.append(data_loader.RescaleUnit())
+        fxns.append(data_loader.SampleWiseCenter())
+    elif method is None:
+        pass
+    else:
+        raise ValueError('method argument is invalid.')
+    if flips:
+        fxns.append(data_loader.RandomFlip())
+    if to_tensor:
+        fxns.append(data_loader.ToTensor())
+    
+    T = transforms.Compose(txns)
+    return T
+        
 def post_process(sm_out: np.ndarray,
                 min_sm_prob: float=0.50,
                 sz_min: int=200,
@@ -159,6 +212,27 @@ def train_model(args):
         transform_train = data_loader.crop512
         transform_test_pre   = data_loader.predcrop512_pre
         transform_test_post  = data_loader.predcrop512
+    elif args.transform.lower() == 'custom':
+        transform_train = build_transform(resize=args.transform_resize,
+                                         crop_sz=args.transform_crop_sz,
+                                         crop_type='random',
+                                         flips = True,
+                                         method='scale_center',
+                                         to_tensor=True)
+        transform_test_pre = build_transform(resize=args.transform_resize,
+                                         crop_sz=None,
+                                         crop_type=None,
+                                         flips=False,
+                                         method='scale_center'
+                                         to_tensor=False,)
+        transform_test_post = build_transform(resize=None,
+                                         crop_sz=None,
+                                         crop_type=None,
+                                         method='scale_center',
+                                         flips=False,
+                                         to_tensor=True)
+    else:
+        raise ValueError('`transform` argument `%s` in invalid.' % args.transform)
 
     if args.exp_name is not None:
         exp_name = args.exp_name
@@ -358,7 +432,11 @@ def main():
     parser.add_argument('--n_classes', type=int, default=2,
         help='number of classes in the target masks.')
     parser.add_argument('--transform', type=str, default='crop512',
-        help='tranformations to apply to input data. one of ["crop512", "crop512raw"].')
+        help='tranformations to apply to input data. one of ["crop512", "crop512raw", "custom"].')
+    parser.add_argument('--transform_resize', type=int, nargs=2, default=[2048,2048],
+        help='resizing size for "custom" transforms. applied before all other transformations.')
+    parser.add_argument('--transform_crop_sz', type=int, nargs=2, default=[512,512],
+        help='cropping size for "custom" transforms.')
     parser.add_argument('--batch_size', type=int, default=1,
         help='bathc size for training.')
     parser.add_argument('--n_epochs', type=int, default=500,
