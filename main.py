@@ -10,45 +10,57 @@ import datetime
 def mkdir_f(f):
     if not os.path.exists(f):
         os.mkdir(f)
-        
+
 from scipy.misc import imresize
 from skimage.morphology import remove_small_objects, binary_erosion, binary_dilation, disk
 from skimage.io import imsave
 
-def post_process(sm_out, min_sm_prob=0.50, sz_min=2000, cell_idx=1, edge_idx=None, erod=False, dil=False):
+def post_process(sm_out: np.ndarray,
+                min_sm_prob: float=0.50,
+                sz_min: int=200,
+                cell_idx: int=1,
+                edge_idx: int=None,
+                erod: int=None,
+                dil: int=None) -> np.ndarray:
     '''
     Post process a softmax output image.
 
     Parameters
     ----------
-    sm_out : ndarray. 1 x C x H x W,
-        where C is the number of classes.
+    sm_out : np.ndarray
+        [1, C, H, W] where C is the number of classes.
         Softmax output, so sm_out.sum(1) ~= 1 at each pixel.
-        May be off by a small error eta due to floating point rounding.
-    min_sm_prob : float, [0, 1]. minimum softmax score to be
-        considered an object.
-    sz_min : float. minimum object area.
-    cell_idx : int. class number for the cell interiors.
-    edge_idx : int. class number for cell edges.
-    erod : integer or False. Size of erosion disk selem.
-    dil : integer or False. Size of dilation disk selem.
+        May be off by a small error epsilon due to floating point rounding.
+    min_sm_prob : float
+        [0, 1]. minimum softmax score to be considered an object.
+    sz_min : float
+        minimum object area.
+    cell_idx : int
+        class number for the cell interiors.
+    edge_idx : int
+        class number for cell edges.
+    erod : int
+        Size of erosion disk selem.
+    dil : int
+        Size of dilation disk selem.
 
     Returns
     -------
-    pp_mask : ndarray, H x W. binary.
+    pp_mask : np.ndarray
+        [H, W] boolean.
         post processing binary segmentation mask.
     '''
-    # Check that the output is a Softmax out
-    softmax_check = (sm_out.sum(1) > 0.99).sum() == sm_out.shape[2]*sm_out.shape[3]
+    # Check that the output is a Sofmasktmax out
+    softmax_check = (sm_out.sum(1) > 0.98).sum() == sm_out.shape[2]*sm_out.shape[3]
     assert softmax_check, 'Class scores do not sum to one. Is this softmax output?'
 
     mask = np.squeeze(sm_out[:,cell_idx,:,:] > min_sm_prob)
     if edge_idx is not None:
         mask[np.squeeze(sm_out[:,edge_idx,:,:] > min_sm_prob)] = 0 # zero borders
     mask_c = remove_small_objects(mask, sz_min)
-    if erod:
+    if erod is not None:
         mask_f = binary_erosion(mask_c, disk(erod))
-    if dil:
+    if dil is not None:
         mask_f = binary_dilation(mask_c, disk(dil))
     else:
         mask_f = mask_c
@@ -82,7 +94,7 @@ def symlink_train_test(input_image_dir: str,
     assert len(imgs) > 0, 'no images/masks found!'
 
     data_dir = osp.split(input_image_dir)[0] # image dir parent will be used for traintest
-    
+
     # Choose random indices for the train set
     n_train = int(np.floor(training_set_fraction*len(imgs)))
     train_idx = np.random.choice(
@@ -94,10 +106,10 @@ def symlink_train_test(input_image_dir: str,
 
     train_path = osp.join(data_dir, 'train_'+expname)
     test_path = osp.join(data_dir, 'test_'+expname)
-    
+
     img_dir_prefix = 'images'
     mask_dir_prefix = 'masks'
-    
+
     mkdir_f(train_path)
     mkdir_f(test_path)
     for tp in [train_path, test_path]:
@@ -152,7 +164,7 @@ def train_model(args):
         exp_name = args.exp_name
     else:
         exp_name = datetime.datetime.today().strftime('%Y%m%d')
-        
+
     train_path, test_path = symlink_train_test(
                        args.input_image_dir,
                        args.image_glob,
@@ -198,11 +210,11 @@ def train_model(args):
                         lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer,
                     step_size=1, gamma=0.995)
-    
+
     mkdir_f(args.output_path)
     mkdir_f(osp.join(args.output_path, exp_name))
     exp_out_path = osp.join(args.output_path, exp_name)
-    
+
 
     print('Training')
     trainer = trainer.Trainer(model,
@@ -221,16 +233,17 @@ def train_model(args):
 def predict(args):
     import data_loader
     from model import DenseNet103, Ensemble
-    
+    import time
+
     # Get image names
     img_files = sorted(glob.glob(
         os.path.join(args.input_image_dir, args.image_glob)))
     # basenames w/o extensions
     img_names = [osp.splitext(osp.basename(x))[0] for x in img_files]
-    
+
     # Load models and build ensemble
     models = []
-    for m in model_paths:
+    for m in [args.model_weights]:
         mdl = DenseNet103(n_classes=args.n_classes)
         mdl.load_state_dict(torch.load(m))
         if torch.cuda.is_available():
@@ -243,19 +256,19 @@ def predict(args):
 
     ens = Ensemble(models)
     print('Models loaded.')
-    
+
     if args.transform.lower() == 'crop512raw':
         transform_pre   = None
         transform_post  = data_loader.predcrop512
     elif args.transform.lower() == 'crop512':
         transform_pre   = data_loader.predcrop512_pre
         transform_post  = data_loader.predcrop512
-    
-    pl = PredCropLoader(args.input_image_dir, 
-                        transform_pre=tranform_pre,
-                        transform_post=transform_post, 
-                        dtype='uint16', 
-                        img_regex=args.img_glob,
+
+    pl = data_loader.PredCropLoader(args.input_image_dir,
+                        transform_pre=transform_pre,
+                        transform_post=transform_post,
+                        dtype='uint16',
+                        img_regex=args.image_glob,
                         n_windows=16)
 
     sm = torch.nn.Softmax2d()
@@ -265,10 +278,10 @@ def predict(args):
     times = []
     for i in range(len(pl)):
         start = time.time()
-        
-        samples = pl[i] 
+
+        samples = pl[i]
         print('Number of samples %d' % len(samples))
-        
+
         outs = [] # np.ndarrays of softmax probs
         with torch.no_grad():
             for d in samples:
@@ -281,15 +294,15 @@ def predict(args):
                 probs = sm(output)
                 probs = probs.cpu().data.numpy() # unpack to numpy array
                 outs.append(probs)
-                
+
         # call a mask for each set of probs
         mask_panels = []
         for sm_panel in outs:
-            mask = post_process(sm_panel, 
-                                min_sm_prob=min_smp, 
-                                sz_min=sz_min, 
-                                erod=erod, 
-                                dil=dil)
+            mask = post_process(sm_panel,
+                                min_sm_prob=1./args.n_classes,
+                                sz_min=200,
+                                erod=None,
+                                dil=None)
             mask_panels.append(mask)
 
         # reconstruct total mask from masks
@@ -299,22 +312,26 @@ def predict(args):
         for j in range(len(mask_panels)):
             total_mask[(j//n_per_side)*mask_sz[0]:((j//n_per_side)+1)*mask_sz[0],
                        (j% n_per_side)*mask_sz[1]:((j% n_per_side)+1)*mask_sz[1]] = mask_panels[j]
-        
-            
-            
-        maskR = imresize(total_mask.astype('uint8'), upsamp_sz, interp='nearest') # upsample
+
+
+        print('Upsampling size: ', tuple(args.upsamp_sz))
+        maskR = imresize(total_mask.astype('uint8'),
+                        tuple(args.upsamp_sz),
+                        interp='nearest') # upsample
         maskR = maskR.astype('bool').astype('uint8')
         # save upsamples mask
-        imsave(os.path.join(args.output_path, img_names[i] + '_densenet.png'), maskR*255)
-        if verbose:
-            print('Processed ', img_names[i])
+        imsave(
+            os.path.join(
+                args.output_path, img_names[i] + args.mask_suffix + '.png'),
+            maskR*255)
+        print('Processed ', img_names[i])
         end = time.time()
         times.append(end-start)
 
     print('Average image processing time : ', np.mean(times))
 
     return
-    
+
 def main():
     parser = configargparse.ArgParser('Utilize FC-DenseNet PyTorch models.',
         default_config_files=['./default_config.txt'])
@@ -350,8 +367,10 @@ def main():
         help='learning rate for training using the RMSprop optimizer.')
     parser.add_argument('--model_weights', type=str, default=None,
         help='path to trained model weights. Required for prediction.')
-    parser.add_argument('--upsamp_sz', type=int, nargs=2, default=[2110, 2492], 
+    parser.add_argument('--upsamp_sz', type=int, nargs=2, default=[2110, 2492],
         help='final size of upsampled mask.')
+    parser.add_argument('--mask_suffix', type=str, default='_focal',
+        help='suffix for mask output files.')
     args = parser.parse_args()
 
     if args.command.lower() == 'train':
