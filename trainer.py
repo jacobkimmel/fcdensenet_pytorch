@@ -280,18 +280,18 @@ class Trainer(object):
                     self.training_state + '_inputs_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
-                  np.squeeze(I[b,0,...])*255)
+                  (np.squeeze(I[b,0,...])*255).astype(np.uint8))
             imsave(os.path.join(self.out_path, 
                     self.training_state + '_labels_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
-                  np.squeeze(L[b,0,...])*255)
+                  (np.squeeze(L[b,0,...])*255).astype(np.uint8))
             imsave(os.path.join(self.out_path, 
                     self.training_state + '_outputs_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
 
-                  np.squeeze(O[b,...])*255)
+                  (np.squeeze(O[b,...])*255).astype(np.uint8))
 
     def train_epoch(self) -> None:
         # Run a train and validation phase for each epoch

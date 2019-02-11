@@ -223,7 +223,7 @@ def train_model(args):
                                          crop_sz=None,
                                          crop_type=None,
                                          flips=False,
-                                         method='scale_center'
+                                         method='scale_center',
                                          to_tensor=False,)
         transform_test_post = build_transform(resize=None,
                                          crop_sz=None,
@@ -332,11 +332,34 @@ def predict(args):
     print('Models loaded.')
 
     if args.transform.lower() == 'crop512raw':
-        transform_pre   = None
-        transform_post  = data_loader.predcrop512
+        transform_train = data_loader.crop512raw
+        transform_test_pre   = None
+        transform_test_post  = data_loader.predcrop512
     elif args.transform.lower() == 'crop512':
-        transform_pre   = data_loader.predcrop512_pre
-        transform_post  = data_loader.predcrop512
+        transform_train = data_loader.crop512
+        transform_test_pre   = data_loader.predcrop512_pre
+        transform_test_post  = data_loader.predcrop512
+    elif args.transform.lower() == 'custom':
+        transform_train = build_transform(resize=args.transform_resize,
+                                         crop_sz=args.transform_crop_sz,
+                                         crop_type='random',
+                                         flips = True,
+                                         method='scale_center',
+                                         to_tensor=True)
+        transform_test_pre = build_transform(resize=args.transform_resize,
+                                         crop_sz=None,
+                                         crop_type=None,
+                                         flips=False,
+                                         method='scale_center',
+                                         to_tensor=False,)
+        transform_test_post = build_transform(resize=None,
+                                         crop_sz=None,
+                                         crop_type=None,
+                                         method='scale_center',
+                                         flips=False,
+                                         to_tensor=True)
+    else:
+        raise ValueError('`transform` argument `%s` in invalid.' % args.transform)
 
     pl = data_loader.PredCropLoader(args.input_image_dir,
                         transform_pre=transform_pre,
