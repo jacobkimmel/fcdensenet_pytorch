@@ -2,7 +2,7 @@ command: train
 image_glob: *.tif
 mask_glob: *.png
 loss: dice
-transform: crop512raw
+transform: crop512
 batch_size: 1
 n_epochs: 500
 lr: 1e-4
