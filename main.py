@@ -22,7 +22,7 @@ def build_transform(resize: tuple=(2048, 2048),
                     flips: bool=True,
                     to_tensor: bool=True,):
     '''Build a torchvision transform
-    
+
     Parameters
     ----------
     resize : tuple
@@ -38,14 +38,14 @@ def build_transform(resize: tuple=(2048, 2048),
         apply random flipping.
     to_tensor : bool
         convert results to `torch.Tensor`.
-    
+
     Returns
     -------
     transform : Callable
     '''
     from torchvision import transforms, utils
     import data_loader
-    
+
     fxns = []
     if resize is not None:
         rsz = data_loader.Resize(size=resize + (1,))
@@ -64,10 +64,10 @@ def build_transform(resize: tuple=(2048, 2048),
         fxns.append(data_loader.RandomFlip())
     if to_tensor:
         fxns.append(data_loader.ToTensor())
-    
+
     T = transforms.Compose(txns)
     return T
-        
+
 def post_process(sm_out: np.ndarray,
                 min_sm_prob: float=0.50,
                 sz_min: int=200,
@@ -138,15 +138,20 @@ def symlink_train_test(input_image_dir: str,
     print('Searching for images in\n %s' % input_image_dir)
     print('Searching for masks in\n %s' % input_mask_dir)
 
-    training_set_fraction = 0.90
+    training_set_fraction = 0.80
     imgs = sorted(glob.glob(osp.join(input_image_dir, image_glob)))
     masks = sorted(glob.glob(osp.join(input_mask_dir, mask_glob)))
+
+    imgs = [os.path.realpath(x) for x in imgs]
+    masks = [os.path.realpath(x) for x in masks]
+
     assert len(imgs) == len(masks), \
         'imgs %d and masks %d have unequal numbers' % (len(imgs), len(masks))
     print('Loaded imgs %d and masks %d.'% (len(imgs), len(masks)))
     assert len(imgs) > 0, 'no images/masks found!'
 
-    data_dir = osp.split(input_image_dir)[0] # image dir parent will be used for traintest
+    data_dir = osp.split(osp.realpath(input_image_dir))[0] # image dir parent will be used for traintest
+    print('Placing train/test symlinks in: %s'%data_dir)
 
     # Choose random indices for the train set
     n_train = int(np.floor(training_set_fraction*len(imgs)))
@@ -176,15 +181,15 @@ def symlink_train_test(input_image_dir: str,
             os.remove(f)
     for i in range(len(train_idx)):
         os.symlink(imgs[train_idx[i]],
-            osp.join(train_path, img_dir_prefix, osp.split(imgs[train_idx[i]])[-1]))
+            osp.join(train_path, img_dir_prefix, osp.basename(imgs[train_idx[i]]) ))
         os.symlink(masks[train_idx[i]],
-            osp.join(train_path, mask_dir_prefix, osp.split(masks[train_idx[i]])[-1]))
+            osp.join(train_path, mask_dir_prefix, osp.basename(masks[train_idx[i]]) ))
 
     for i in range(len(test_idx)):
         os.symlink(imgs[test_idx[i]],
-            osp.join(test_path, img_dir_prefix, osp.split(imgs[test_idx[i]])[-1] ))
+            osp.join(test_path, img_dir_prefix, osp.basename(imgs[test_idx[i]]) ))
         os.symlink(masks[test_idx[i]],
-            osp.join(test_path, mask_dir_prefix, osp.split(masks[test_idx[i]])[-1] ))
+            osp.join(test_path, mask_dir_prefix, osp.basename(masks[test_idx[i]]) ))
     print('Symlinking finished.')
     return train_path, test_path
 
@@ -246,18 +251,22 @@ def train_model(args):
                        args.mask_glob,
                        exp_name)
 
-    train_ds = data_loader.CellDataset(osp.join(train_path, 'images'),
-                           osp.join(train_path, 'masks'),
-                           transform=transform_train,
-                           symlinks=True)
+    train_ds = data_loader.CellDataset(
+        img_dir=osp.join(train_path, 'images'),
+        mask_dir=osp.join(train_path, 'masks'),
+        transform=transform_train,
+        symlinks=True,
+    )
 
     # use a consistent set of crops in the testing set
-    test_ds = data_loader.CellCropDataset(osp.join(test_path, 'images'),
-                          osp.join(test_path, 'masks'),
-                          transform_pre=transform_test_pre,
-                          transform_post=transform_test_post,
-                          n_windows=16,
-                          symlinks=True)
+    test_ds = data_loader.CellCropDataset(
+        img_dir=osp.join(test_path, 'images'),
+        mask_dir=osp.join(test_path, 'masks'),
+        transform_pre=transform_test_pre,
+        transform_post=transform_test_post,
+        n_windows=4,
+        symlinks=True,
+    )
 
     train_dl = torch.utils.data.DataLoader(train_ds,
                     batch_size=args.batch_size,
@@ -271,8 +280,18 @@ def train_model(args):
                     'val':test_dl}
 
     print('Loading model...')
-    model = DenseNet103(n_classes=args.n_classes,
-                        growth_rate=args.growth_rate)
+    model = DenseNet103(
+        n_classes=args.n_classes,
+        growth_rate=args.growth_rate,
+    )
+
+    if args.model_weights is not None:
+        print('Loading pre-trained initialization...')
+        model.load_state_dict(
+            torch.load(args.model_weights, map_location='cpu'),
+        )
+        print('Initialization loaded.')
+
     if torch.cuda.is_available():
         model = model.cuda()
         print('Model moved to CUDA compute device.')
@@ -299,7 +318,7 @@ def train_model(args):
                       n_epochs=args.n_epochs,
                       ignore_index = args.n_classes+1,
                       scheduler=scheduler,
-                      verbose=True,
+                      verbose=False,
                       viz=True,
                       val_occupied_only=val_occupied_only)
     trainer.train()
@@ -308,6 +327,8 @@ def predict(args):
     import data_loader
     from model import DenseNet103, Ensemble
     import time
+
+    os.makedirs(args.output_path, exist_ok=True)
 
     # Get image names
     img_files = sorted(glob.glob(
@@ -362,11 +383,11 @@ def predict(args):
         raise ValueError('`transform` argument `%s` in invalid.' % args.transform)
 
     pl = data_loader.PredCropLoader(args.input_image_dir,
-                        transform_pre=transform_pre,
-                        transform_post=transform_post,
+                        transform_pre=transform_test_pre,
+                        transform_post=transform_test_post,
                         dtype='uint16',
                         img_regex=args.image_glob,
-                        n_windows=16)
+                        n_windows=4)
 
     sm = torch.nn.Softmax2d()
 
@@ -464,7 +485,7 @@ def main():
         help='bathc size for training.')
     parser.add_argument('--n_epochs', type=int, default=500,
         help='number of epochs for training')
-    parser.add_argument('--lr', type=float, default=1e-4,
+    parser.add_argument('--lr', type=float, default=1e-5,
         help='learning rate for training using the RMSprop optimizer.')
     parser.add_argument('--model_weights', type=str, default=None,
         help='path to trained model weights. Required for prediction.')

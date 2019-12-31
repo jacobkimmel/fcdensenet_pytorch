@@ -47,10 +47,10 @@ def crossentropy2d(pred, target, weight=None, ignore_index=2, size_average=True)
     return loss
 
 # Dice loss from Roger Trullo
-# 
+#
 
 class DiceLoss(nn.Module):
-    
+
     def __init__(self, ignore_label: int=3, C: int=3) -> None:
         '''
         Computes a Dice loss from 2D input of class scores and a target of integer labels.
@@ -61,17 +61,17 @@ class DiceLoss(nn.Module):
             Must be final label in the sequence (TODO, generalize).
         C : integer.
             number of classes (including an ignored label if present!)
-            
+
         Notes
         -----
         Credit to Roger Trullo
-        https://github.com/rogertrullo/pytorch/blob/rogertrullo-dice_loss/torch/nn/functional.py#L708        
+        https://github.com/rogertrullo/pytorch/blob/rogertrullo-dice_loss/torch/nn/functional.py#L708
         '''
         super(DiceLoss, self).__init__()
         self.ignore_label = ignore_label
         self.C = C
         return
-    
+
     def forward(self, input_, target) -> float:
         target = utils.make_one_hot(target, C=self.C)
         # subindex target without the ignore label
@@ -99,7 +99,7 @@ class DiceLoss(nn.Module):
         dice_total=-1*torch.sum(dice_eso)/dice_eso.size(0)#divide by batch_sz
 
         return dice_total
-    
+
 def dice_loss_integer(input_, target, ignore_label=3, C=3):
     """
     Computes a Dice loss from 2D input of class scores and a target of integer labels.
@@ -196,19 +196,19 @@ class Trainer(object):
     Trains a model
     '''
 
-    def __init__(self, 
-                model, 
-                criterion, 
+    def __init__(self,
+                model,
+                criterion,
                 optimizer,
-                dataloaders: dict, 
-                out_path: str, 
-                n_epochs: int=50, 
+                dataloaders: dict,
+                out_path: str,
+                n_epochs: int=50,
                 ignore_index: int=2,
-                use_gpu: bool=torch.cuda.is_available(), 
-                verbose: bool=False, 
+                use_gpu: bool=torch.cuda.is_available(),
+                verbose: bool=False,
                 save_freq: int=10,
-                scheduler = None, 
-                viz: bool=False, 
+                scheduler = None,
+                viz: bool=False,
                 val_occupied_only: bool=False):
 
         '''
@@ -255,7 +255,7 @@ class Trainer(object):
         self.viz = viz
         self.print_iter = 50
         # only save validation metrics for subpanels that have foreground classes
-        self.val_occupied_only = True 
+        self.val_occupied_only = True
 
         if not os.path.exists(self.out_path):
             os.mkdir(self.out_path)
@@ -265,10 +265,10 @@ class Trainer(object):
             header = 'Epoch,Iter,Running_Loss,Mode\n'
             f.write(header)
 
-    def _save_train_viz(self, 
-                        inputs: torch.Tensor, 
-                        labels: torch.Tensor, 
-                        outputs: torch.Tensor, 
+    def _save_train_viz(self,
+                        inputs: torch.Tensor,
+                        labels: torch.Tensor,
+                        outputs: torch.Tensor,
                         iteration: int) -> None:
         '''save visualizations of training'''
         I = inputs.cpu().detach().numpy()
@@ -276,17 +276,17 @@ class Trainer(object):
         O = outputs.cpu().detach().numpy()
 
         for b in range(1):
-            imsave(os.path.join(self.out_path, 
+            imsave(os.path.join(self.out_path,
                     self.training_state + '_inputs_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
                   (np.squeeze(I[b,0,...])*255).astype(np.uint8))
-            imsave(os.path.join(self.out_path, 
+            imsave(os.path.join(self.out_path,
                     self.training_state + '_labels_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
                   (np.squeeze(L[b,0,...])*255).astype(np.uint8))
-            imsave(os.path.join(self.out_path, 
+            imsave(os.path.join(self.out_path,
                     self.training_state + '_outputs_e' \
                                 + str(self.epoch).zfill(4) \
                                 + '_i' + str(iteration).zfill(4) + '.png'),
@@ -411,13 +411,13 @@ class Trainer(object):
             print('Epoch {}/{}'.format(epoch, self.n_epochs - 1))
             print('-' * 10)
             # run training epoch
-            if self.scheduler is not None:
-                self.scheduler.step()
             self.training_state = 'train'
             self.train_epoch()
             self.training_state = 'val'
             with torch.no_grad():
                 self.val_epoch()
+            if self.scheduler is not None:
+                self.scheduler.step()                
 
         print('Saving best model weights...')
         torch.save(self.model.state_dict(), os.path.join(self.out_path, '00_best_model_weights.pickle'))

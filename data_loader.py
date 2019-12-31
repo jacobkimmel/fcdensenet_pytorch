@@ -39,12 +39,12 @@ def resize_sample(sample, size=(512,512,1)):
 class CellDataset(Dataset):
     '''Cell Segmentation Dataset'''
 
-    def __init__(self, 
+    def __init__(self,
                  img_dir: str,
-                 mask_dir: str, 
-                 transform=None, 
-                 dtype: str='uint16', 
-                 symlinks: bool=False, 
+                 mask_dir: str,
+                 transform=None,
+                 dtype: str='uint16',
+                 symlinks: bool=False,
                  name_check: bool=False,
                  samples_per_image: int=1):
         '''
@@ -61,7 +61,7 @@ class CellDataset(Dataset):
         symlinks : bool
             inputs are symlink paths.
         name_check : bool
-            perform a check to ensure names match a format of 
+            perform a check to ensure names match a format of
             "img_name.EXT" <> "img_name_mask.EXT"
         samples_per_image : int
             number of samples to yield per image.
@@ -83,7 +83,7 @@ class CellDataset(Dataset):
             self.masks = [os.path.realpath(x) for x in self.masks]
 
         assert len(self.imgs) == len(self.masks),'Mismatched img and mask numbers'
-        
+
         if name_check:
             img_names = [os.path.splitext(os.path.basename(x))[0] for x in self.imgs]
             mask_names = [os.path.basename(x).split('_mask')[0] for x in self.masks]
@@ -610,9 +610,9 @@ basic_512 = transforms.Compose([Resize(size=(512,512,1)),
                                 RandomFlip(),
                                 ToTensor()])
 
-basic_512v = transforms.Compose([Resize(size=(512,512,1)), 
-                                RescaleUnit(), 
-                                SamplewiseCenter(), 
+basic_512v = transforms.Compose([Resize(size=(512,512,1)),
+                                RescaleUnit(),
+                                SamplewiseCenter(),
                                 ToTensor()])
 
 basic_256 = transforms.Compose([Resize(size=(256,256,1)),
@@ -628,7 +628,7 @@ basic_256v = transforms.Compose([Resize(size=(256,256,1)),
 
 
 
-crop512 = transforms.Compose([Resize(size=(2048,2048,1)),
+crop512 = transforms.Compose([Resize(size=(1024,1024,1)),
                               BinarizeMask(),
                                RandomCrop(crop_sz=(512,512), min_mask_sum=1),
                                 RescaleUnit(),
@@ -644,7 +644,7 @@ crop512raw = transforms.Compose([
                               RandomFlip(),
                               ToTensor()])
 
-predcrop512_pre = transforms.Compose([Resize(size=(2048,2048,1))])
+predcrop512_pre = transforms.Compose([Resize(size=(1024,1024,1))])
 predcrop512 = transforms.Compose([
                                 BinarizeMask(),
                                 RescaleUnit(),
