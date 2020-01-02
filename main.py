@@ -340,7 +340,7 @@ def predict(args):
     models = []
     for m in [args.model_weights]:
         mdl = DenseNet103(n_classes=args.n_classes)
-        mdl.load_state_dict(torch.load(m))
+        mdl.load_state_dict(torch.load(m, map_location='cpu'))
         if torch.cuda.is_available():
             mdl = mdl.cuda()
             print('Moved model to CUDA compute device.')
